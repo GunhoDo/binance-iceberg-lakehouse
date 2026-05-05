@@ -1,0 +1,41 @@
+-- 09_metadata_checks.sql
+--
+-- Iceberg metadata table 조회 패턴 모음. PRD §12.2, §12.3, §13.4 참조.
+--
+-- Iceberg는 다음 metadata table을 제공한다 (catalog 따라 syntax 차이 있을 수 있음):
+--   <catalog>.<db>.<table>.snapshots
+--   <catalog>.<db>.<table>.files
+--   <catalog>.<db>.<table>.partitions
+--   <catalog>.<db>.<table>.history
+--
+-- 본 파일은 자주 쓰는 조회 형태의 골격만 둔다. 실제 column 이름과 syntax는
+-- Phase 2 진입 후 본 프로젝트의 catalog로 확인하면서 채운다.
+
+-- ----------------------------------------------------------------------------
+-- 1) snapshot 변화 추적 (PRD §12.1, §12.2)
+-- ----------------------------------------------------------------------------
+-- TODO Phase 2
+-- SELECT
+--     snapshot_id,
+--     committed_at,
+--     operation,
+--     summary
+-- FROM <catalog>.processed.processed_orders.snapshots
+-- ORDER BY committed_at DESC
+-- LIMIT 20;
+
+-- ----------------------------------------------------------------------------
+-- 2) file 분포 / small file 카운트 (PRD §13.4, §13.5)
+-- ----------------------------------------------------------------------------
+-- TODO Phase 2
+-- SELECT
+--     COUNT(*)                                  AS file_count,
+--     AVG(file_size_in_bytes)                   AS avg_file_size_bytes,
+--     SUM(CASE WHEN file_size_in_bytes < <threshold> THEN 1 ELSE 0 END) AS small_file_count
+-- FROM <catalog>.processed.processed_orders.files;
+
+-- ----------------------------------------------------------------------------
+-- 3) compaction 전후 비교 입력값 (PRD §12.3)
+-- ----------------------------------------------------------------------------
+-- TODO Phase 2
+-- 위 (1), (2) 의 결과를 compaction 실행 전후로 두 번 측정해 비교 (PRD §12.3 표).

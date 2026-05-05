@@ -1,0 +1,64 @@
+-- 06_create_observability_tables.sql
+--
+-- Observability tables. PRD §13.2 ~ §13.4, §11 (Append only).
+--
+-- 세 table 모두 시간순 누적이며 update가 없다.
+
+-- ----------------------------------------------------------------------------
+-- data_quality_summary  (PRD §13.2)
+-- ----------------------------------------------------------------------------
+
+-- TODO Phase 3
+-- CREATE TABLE IF NOT EXISTS <catalog>.ops.data_quality_summary (
+--     measured_at              TIMESTAMP,
+--     raw_trade_count          BIGINT,
+--     raw_kline_count          BIGINT,
+--     raw_order_count          BIGINT,
+--     processed_trade_count    BIGINT,
+--     processed_kline_count    BIGINT,
+--     processed_order_count    BIGINT,
+--     duplicate_trade_count    BIGINT,
+--     duplicate_order_count    BIGINT,
+--     null_symbol_count        BIGINT,
+--     invalid_price_count      BIGINT,
+--     invalid_quantity_count   BIGINT,
+--     freshness_lag_minutes    DECIMAL
+-- )
+-- USING iceberg;
+
+-- ----------------------------------------------------------------------------
+-- pipeline_run_summary  (PRD §13.3)
+-- ----------------------------------------------------------------------------
+
+-- TODO Phase 3
+-- CREATE TABLE IF NOT EXISTS <catalog>.ops.pipeline_run_summary (
+--     run_id                   STRING,
+--     dag_id                   STRING,
+--     task_id                  STRING,
+--     run_start                TIMESTAMP,
+--     run_end                  TIMESTAMP,
+--     status                   STRING,
+--     duration_seconds         DECIMAL,
+--     retry_count              INT,
+--     processed_row_count      BIGINT
+-- )
+-- USING iceberg;
+
+-- ----------------------------------------------------------------------------
+-- table_health_summary  (PRD §13.4)
+-- ----------------------------------------------------------------------------
+
+-- TODO Phase 3
+-- CREATE TABLE IF NOT EXISTS <catalog>.ops.table_health_summary (
+--     measured_at              TIMESTAMP,
+--     table_name               STRING,
+--     snapshot_count           BIGINT,
+--     file_count               BIGINT,
+--     average_file_size_bytes  BIGINT,
+--     small_file_count         BIGINT,
+--     total_record_count       BIGINT,
+--     last_commit_time         TIMESTAMP,
+--     last_compaction_time     TIMESTAMP,
+--     compaction_needed        BOOLEAN
+-- )
+-- USING iceberg;

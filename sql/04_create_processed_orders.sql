@@ -1,0 +1,34 @@
+-- 04_create_processed_orders.sql
+--
+-- processed_orders — 주문별 최신 상태를 관리하는 Iceberg table.
+-- PRD §10.5, §11 (COW) 참조.
+--
+-- 상태 전이:
+--   NEW → PARTIALLY_FILLED → FILLED
+--   NEW → CANCELED
+--
+-- Write Pattern: Append + MERGE (PRD §9).
+-- Key: order_id
+
+-- TODO Phase 2
+-- CREATE TABLE IF NOT EXISTS <catalog>.processed.processed_orders (
+--     order_id          STRING,
+--     symbol            STRING,
+--     side              STRING,
+--     order_type        STRING,
+--     order_price       DECIMAL,
+--     order_qty         DECIMAL,
+--     filled_qty        DECIMAL,
+--     avg_fill_price    DECIMAL,
+--     order_status      STRING,
+--     created_at        TIMESTAMP,
+--     updated_at        TIMESTAMP,
+--     filled_at         TIMESTAMP,
+--     canceled_at       TIMESTAMP,
+--     source_topic      STRING,
+--     source_partition  INT,
+--     source_offset     BIGINT
+-- )
+-- USING iceberg
+-- -- PARTITIONED BY (...)         -- decisions.md D9
+-- ;

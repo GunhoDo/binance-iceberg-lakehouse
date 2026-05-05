@@ -1,0 +1,34 @@
+-- 03_create_processed_klines.sql
+--
+-- processed_klines — raw kline event를 정제한 캔들 단위 Iceberg table.
+-- PRD §10.4, §11 (COW) 참조.
+--
+-- Write Pattern: Append + MERGE (PRD §9).
+-- Key: (symbol, interval, open_time)
+--
+-- 보류 항목:
+--   - DECIMAL 정밀도 — Phase 2에서 결정.
+--   - PARTITIONED BY — 쿼리 패턴 보고 결정 (decisions.md D9).
+
+-- TODO Phase 2
+-- CREATE TABLE IF NOT EXISTS <catalog>.processed.processed_klines (
+--     symbol            STRING,
+--     `interval`        STRING,
+--     open_time         TIMESTAMP,
+--     close_time        TIMESTAMP,
+--     open              DECIMAL,
+--     high              DECIMAL,
+--     low               DECIMAL,
+--     close             DECIMAL,
+--     volume            DECIMAL,
+--     quote_volume      DECIMAL,
+--     number_of_trades  BIGINT,
+--     is_closed         BOOLEAN,
+--     source_topic      STRING,
+--     source_partition  INT,
+--     source_offset     BIGINT,
+--     updated_at        TIMESTAMP
+-- )
+-- USING iceberg
+-- -- PARTITIONED BY (...)         -- decisions.md D9
+-- ;

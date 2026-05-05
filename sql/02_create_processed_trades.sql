@@ -1,0 +1,29 @@
+-- 02_create_processed_trades.sql
+--
+-- processed_trades — raw trade event를 정제한 체결 단위 Iceberg table.
+-- PRD §10.3, §11 (COW) 참조.
+--
+-- Write Pattern: Append (PRD §9).
+--
+-- 보류 항목:
+--   - 가격 / 수량 DECIMAL 정밀도 — PRD에 명시 없음, Phase 2에서 결정.
+--   - PARTITIONED BY — 쿼리 패턴과 데이터 분포를 보고 결정 (decisions.md D9).
+--   - TBLPROPERTIES — COW 기본값 외 옵션은 Phase 2에서 결정.
+
+-- TODO Phase 2
+-- CREATE TABLE IF NOT EXISTS <catalog>.processed.processed_trades (
+--     symbol            STRING,
+--     trade_id          BIGINT,        -- 또는 STRING (agg_trade_id 포함 여부에 따라)
+--     price             DECIMAL,       -- 정밀도 미정
+--     quantity          DECIMAL,       -- 정밀도 미정
+--     trade_time        TIMESTAMP,
+--     is_buyer_maker    BOOLEAN,
+--     source_topic      STRING,
+--     source_partition  INT,
+--     source_offset     BIGINT,
+--     ingest_time       TIMESTAMP
+-- )
+-- USING iceberg
+-- -- PARTITIONED BY (...)         -- decisions.md D9
+-- -- TBLPROPERTIES (...)          -- COW 기본값, 추가 옵션은 Phase 2
+-- ;

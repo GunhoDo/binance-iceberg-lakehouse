@@ -1,0 +1,23 @@
+# docker-compose.yml
+#
+# 본 MVP의 로컬 환경 정의 자리. PRD §16.1 (local Kafka → Docker → MSK 확장 방향)
+# 참조.
+#
+# 본 스켈레톤은 의도적으로 비워둔다. 이유:
+#   - Kafka, Spark, Iceberg catalog의 정확한 이미지와 버전은 본인이 직접 사용해 본
+#     조합으로 채워야 한다.
+#   - 검증되지 않은 docker-compose 정의를 미리 박으면 README의 실행 절차가
+#     "검증되지 않은 명령" 으로 오염된다 (README "실행 안내" 정책 참조).
+#
+# 채워야 할 서비스 후보 (Phase 1):
+#   - kafka  (broker)
+#   - zookeeper or KRaft 모드 — 사용 이미지가 무엇을 요구하느냐에 따라 결정
+#   - spark  (master / worker — 또는 단일 driver 컨테이너)
+#   - iceberg catalog backend — Hadoop catalog는 별도 컨테이너가 필요 없을 수 있고,
+#                               REST catalog 또는 Hive metastore를 쓸 수도 있음
+#                               (decisions.md D8 참조)
+#
+# Phase 1 진입 시 본 파일을 채운다.
+
+version: "3.9"
+services: {}

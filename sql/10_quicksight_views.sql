@@ -1,0 +1,14 @@
+-- 10_quicksight_views.sql
+--
+-- QuickSight 대시보드용 view. PRD §15 참조.
+--
+-- 대시보드와 serving table을 직접 결합하지 않고 view 한 단계를 두는 이유:
+--   - 대시보드 요구가 바뀌어도 serving table 스키마를 보호한다.
+--   - 필터, rename, 단위 변환 등 대시보드 친화적인 형태를 view에서 처리한다.
+--
+-- 본 파일은 Phase 4에서 채운다.
+
+-- TODO Phase 4 — Market Dashboard view
+-- TODO Phase 4 — Order Execution Dashboard view
+-- TODO Phase 4 — Data Quality Dashboard view
+-- TODO Phase 4 — Iceberg Operations Dashboard view

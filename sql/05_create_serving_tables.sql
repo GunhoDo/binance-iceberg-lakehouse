@@ -1,0 +1,60 @@
+-- 05_create_serving_tables.sql
+--
+-- Serving tables — QuickSight 조회 대상. PRD §10.6, §11 (COW), §13.1 참조.
+--
+-- 본 단계의 컬럼은 PRD §10.6 / §13.1의 지표 목록을 기반으로 작성한다.
+-- 정확한 타입과 partition은 Phase 2에서 결정 (decisions.md D9).
+
+-- ----------------------------------------------------------------------------
+-- market_hourly_summary
+-- ----------------------------------------------------------------------------
+--
+-- source: processed_klines (OHLCV 기준) + processed_trades (보조 지표).
+-- key: (symbol, hour bucket)
+-- write pattern: MERGE, Incremental (PRD §9)
+
+-- TODO Phase 2
+-- CREATE TABLE IF NOT EXISTS <catalog>.serving.market_hourly_summary (
+--     symbol            STRING,
+--     window_start      TIMESTAMP,    -- hour bucket
+--     window_end        TIMESTAMP,
+--     open_price        DECIMAL,
+--     close_price       DECIMAL,
+--     high_price        DECIMAL,
+--     low_price         DECIMAL,
+--     trade_volume      DECIMAL,
+--     quote_volume      DECIMAL,
+--     number_of_trades  BIGINT,
+--     average_trade_size DECIMAL,
+--     volatility_proxy  DECIMAL,
+--     updated_at        TIMESTAMP
+-- )
+-- USING iceberg
+-- -- PARTITIONED BY (...)
+-- ;
+
+-- ----------------------------------------------------------------------------
+-- order_execution_summary
+-- ----------------------------------------------------------------------------
+--
+-- source: processed_orders.
+-- key: (symbol, hour bucket)  -- 또는 다른 grain. Phase 2에서 결정.
+
+-- TODO Phase 2
+-- CREATE TABLE IF NOT EXISTS <catalog>.serving.order_execution_summary (
+--     symbol                  STRING,
+--     window_start            TIMESTAMP,
+--     window_end              TIMESTAMP,
+--     total_orders            BIGINT,
+--     filled_orders           BIGINT,
+--     canceled_orders         BIGINT,
+--     partial_filled_orders   BIGINT,
+--     fill_rate               DECIMAL,
+--     cancel_rate             DECIMAL,
+--     average_fill_delay_sec  DECIMAL,
+--     average_slippage_proxy  DECIMAL,
+--     updated_at              TIMESTAMP
+-- )
+-- USING iceberg
+-- -- PARTITIONED BY (...)
+-- ;

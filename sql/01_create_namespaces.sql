@@ -1,0 +1,16 @@
+-- 01_create_namespaces.sql
+--
+-- 네임스페이스 생성. catalog 이름과 namespace 구분 정책은 Phase 1에서 결정한다.
+-- (decisions.md D8 참조 — Hadoop / Hive / Glue 중 무엇을 쓸지에 따라 SQL이 달라짐)
+--
+-- 본 프로젝트가 사용하는 논리적 zone:
+--   raw       : raw_trades, raw_klines, raw_orders
+--   processed : processed_trades, processed_klines, processed_orders
+--   serving   : market_hourly_summary, order_execution_summary
+--   ops       : data_quality_summary, pipeline_run_summary, table_health_summary
+--
+-- 위 zone을 namespace 단위로 나눌지, 단일 namespace에서 prefix로 구분할지
+-- 결정한 뒤 본 파일을 채운다.
+
+-- TODO Phase 1
+-- CREATE NAMESPACE IF NOT EXISTS <catalog>.<zone>;

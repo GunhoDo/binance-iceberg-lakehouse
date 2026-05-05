@@ -1,0 +1,20 @@
+# requirements.txt
+#
+# 본 파일은 의도적으로 최소 의존성만 명시한다. 이유:
+#   - 검증되지 않은 버전 조합을 박지 않는다. 특히 pyspark / iceberg 호환성은
+#     실제로 돌려본 조합으로 결정한다.
+#   - Phase가 진행되며 필요 라이브러리가 늘어날 때 그때 추가한다.
+#
+# 현재 시점에서 거의 확실히 필요한 것만:
+
+# Binance public data 수집용 HTTP 클라이언트 — Phase 1
+# requests
+
+# Kafka producer/consumer — Phase 1
+# 표준은 kafka-python 또는 confluent-kafka. 결정 후 활성화.
+
+# pyspark — Phase 1 (정확한 버전은 Iceberg jar 호환성 확인 후 결정)
+# pyspark
+
+# 테스트 — Phase 0/1
+# pytest
