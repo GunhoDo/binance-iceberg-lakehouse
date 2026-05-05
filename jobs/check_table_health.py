@@ -28,11 +28,11 @@ from jobs.common.spark_session import get_spark
 # PRD §11에 정의된 본 프로젝트의 Iceberg table 목록.
 # 본 job은 이 table들을 순회하며 health 지표를 측정한다.
 TARGET_TABLES = [
-    "processed_trades",
-    "processed_klines",
-    "processed_orders",
-    "market_hourly_summary",
-    "order_execution_summary",
+    "glue.binance_lakehouse.processed_trades",
+    "glue.binance_lakehouse.processed_klines",
+    "glue.binance_lakehouse.processed_orders",
+    "glue.binance_lakehouse.market_hourly_summary",
+    "glue.binance_lakehouse.order_execution_summary",
 ]
 
 

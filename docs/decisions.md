@@ -170,19 +170,19 @@ MVP의 모든 processed/serving table은 COW (Copy-on-Write) 로 시작한다.
 
 ---
 
-## D7. Raw Zone — append-only 유지
+## D7. Raw Zone — append-only, plain Parquet
 
 ### 결정
 
-`raw_trades`, `raw_klines`, `raw_orders`는 모두 append-only로 유지한다.
-update / delete를 적용하지 않는다.
+`raw_trades`, `raw_klines`, `raw_orders`는 Iceberg가 아니라 **plain Parquet**으로
+S3에 적재한다. Glue External Table로 읽기만 가능하게 한다.
 
 ### 이유
 
-- 파싱 오류, 집계 로직 변경, 시뮬레이터 가정 변경이 발생해도 raw event를 기준으로
-  processed table을 재생성해야 한다.
-- Raw Zone에서 update를 허용하면 재처리 기준이 흔들린다.
-- Kline의 upsert-like 처리는 raw가 아니라 processed의 책임이다.
+- Raw는 재처리 기준이 되는 원본이다. Iceberg의 snapshot/MERGE가 필요 없다.
+- Iceberg는 processed(Silver) 부터 시작한다.
+- Raw에 Iceberg를 쓰면 streaming write의 small file 문제가 생겨도 Iceberg
+  compaction으로 건드릴 수 없다 (Iceberg 밖의 파일이 되어버리기 때문).
 
 ### 보류 / 미정
 
