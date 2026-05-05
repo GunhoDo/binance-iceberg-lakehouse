@@ -16,5 +16,8 @@
 # pyspark — Phase 1 (정확한 버전은 Iceberg jar 호환성 확인 후 결정)
 # pyspark
 
-# 테스트 — Phase 0/1
-# pytest
+# Phase 0
+kafka-python==2.0.2
+
+# Phase 1
+pyspark==3.5.5
