@@ -1,23 +1,16 @@
 """stream_raw_orders.py
 
-Kafka topic `orders` → Iceberg table `raw_orders` (append-only).
+Kafka topic `orders` → S3 plain Parquet (append-only).
 
-PRD §10.2, §14.1 참조.
-
-저장 대상 컬럼은 PRD §10.2 참조. 이 table의 source는 simulator이며 실데이터가
-아니라는 사실을 잊지 말 것 (PRD §2, §6.3).
-"""
-
-"""stream_raw_orders.py
-
-Kafka topic `orders` → Iceberg table `glue.raw.raw_orders` (append-only).
+Raw Zone은 Iceberg가 아니다 (decisions.md D7).
+source는 orders simulator이며 실데이터가 아니다 (PRD §2, §6.3).
 
 PRD §10.2, §14.1 참조.
 
 실행:
     PYTHONPATH=. spark-submit \\
         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \\
-        streams/stream_raw_klines.py
+        streams/stream_raw_orders.py
 """
 
 from __future__ import annotations
@@ -28,8 +21,8 @@ from jobs.common.spark_session import get_spark_streaming
 
 KAFKA_BOOTSTRAP = "localhost:9092"
 KAFKA_TOPIC = "orders"
-OUTPUT_PATH = "s3://binance-iceberg-lake/raw/orders/"
-CHECKPOINT_PATH = "s3://binance-iceberg-lake/checkpoints/raw_orders/"
+OUTPUT_PATH = "s3a://binance-iceberg-lake/raw/orders/"
+CHECKPOINT_PATH = "s3a://binance-iceberg-lake/checkpoints/raw_orders/"
 
 
 def run() -> None:
