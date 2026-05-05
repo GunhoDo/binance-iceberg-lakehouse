@@ -133,11 +133,50 @@ Binance Public Market Data
 
 ## 4. 이 도메인에서 Iceberg가 가장 가치 있는 지점
 
-### 주문 상태 변화 — MERGE INTO
+거래 도메인의 핵심은 **"나중에 바뀌는 데이터"** 다. 광고 도메인의 conversion delay처럼,
+거래 도메인에도 처음 이벤트가 발생한 뒤 나중에 원래 row를 업데이트해야 하는 상황이
+두 가지 있다. 이 두 가지가 Iceberg MERGE INTO를 써야만 하는 직접적인 이유다.
 
-주문 하나가 lifecycle 동안 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED`로
-상태가 바뀐다. 기존 Hive/Parquet 구조에서는 partition 전체를 재작성해야 한다.
-Iceberg MERGE INTO는 변경된 row만 처리한다.
+### 4-1. Kline — interval 진행 중 반복 update
+
+1분봉 kline은 1분이 끝나기 전까지 같은 `open_time`으로 계속 값이 바뀐다.
+
+```
+17:00:00 → open=42000, high=42000, low=42000, close=42000, volume=0.5  ← 첫 체결
+17:00:30 → open=42000, high=42100, low=41900, close=42050, volume=1.2  ← 중간
+17:01:00 → open=42000, high=42150, low=41850, close=42100, volume=2.8  ← 확정
+```
+
+같은 `(symbol, interval, open_time)` 키에 값이 계속 덮어써진다. Parquet이었다면
+17:01:00에 partition 전체를 재작성해야 한다. Iceberg MERGE는 변경된 row만 처리한다.
+
+```sql
+MERGE INTO glue.binance_lakehouse.processed_klines t
+USING staging s
+ON t.symbol = s.symbol AND t.interval = s.interval AND t.open_time = s.open_time
+WHEN MATCHED THEN UPDATE SET *
+WHEN NOT MATCHED THEN INSERT *;
+```
+
+### 4-2. Order — 주문 체결까지 상태가 바뀐다
+
+주문 하나가 체결되기까지 같은 `order_id`로 상태가 계속 바뀐다.
+
+```
+10:00:00 → order_id=001, status=NEW,              filled_qty=0
+10:00:05 → order_id=001, status=PARTIALLY_FILLED, filled_qty=0.3
+10:00:12 → order_id=001, status=FILLED,           filled_qty=1.0
+```
+
+광고 도메인의 conversion delay와 정확히 대응된다.
+
+```
+광고: impression 발생 → 며칠 후 conversion 확정  → row update 필요
+거래: order 생성    → 몇 초/분 후 fill 확정      → row update 필요
+```
+
+`s.updated_at >= t.updated_at` 조건으로 늦게 도착한 이벤트가 최신 상태를 덮어쓰지
+않도록 단조성을 보장한다.
 
 ```sql
 MERGE INTO glue.binance_lakehouse.processed_orders t
@@ -146,18 +185,12 @@ WHEN MATCHED AND s.updated_at >= t.updated_at THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *;
 ```
 
-### Kline 반복 Update
-
-Kline은 interval이 진행되는 동안 같은 `(symbol, interval, open_time)` 키로 수십 번
-update가 도착한다. Raw에서는 전부 append하고, processed에서 MERGE로 최신 상태만 유지한다.
-Parquet 구조였다면 partition 전체 재작성이 필요했다.
-
-### Snapshot 기반 재처리
+### 4-3. Snapshot 기반 재처리
 
 Raw Zone의 Kafka offset + Iceberg snapshot 조합으로 특정 시점 상태로 복구가 가능하다.
 집계 로직 버그 발견 시 raw event를 기준으로 processed table을 재생성할 수 있다.
 
-### Metadata Table 기반 운영
+### 4-4. Metadata Table 기반 운영
 
 Iceberg metadata table(`snapshots`, `files`, `partitions`)을 SQL로 직접 조회해
 운영 상태를 확인한다. 별도 모니터링 도구 없이 파일 수, snapshot 수, compaction
@@ -203,8 +236,8 @@ TODO: QuickSight 대시보드 구성 후 아래 항목의 스크린샷을 추가
 
 ## 7. 100x 스케일 아웃 시나리오
 
-현재 MVP는 BTCUSDT 2024년 1~3월치, 일 약 400만 건(trades 기준) 수준이다.
-100x(일 4억 건)가 되면 어디가 깨지고 어떻게 대응하는지를 설계 수준에서 정리한다.
+현재 MVP는 BTCUSDT 2024년 1월, trades 약 5,254만 건 수준이다.
+100x(일 5억 건 이상)가 되면 어디가 깨지고 어떻게 대응하는지를 설계 수준에서 정리한다.
 
 ### 깨지는 지점
 
@@ -261,7 +294,7 @@ PYTHONPATH=. spark-submit \
 
 ### 시나리오 2 — 집계 로직 버그로 백필 필요
 
-**상황**: processed_trades의 집계 로직에 버그가 발견됐다. 3개월치를 재처리해야 한다.
+**상황**: processed_trades의 집계 로직에 버그가 발견됐다. 1개월치를 재처리해야 한다.
 
 **대응**:
 - Raw Zone이 append-only로 보존되어 있으므로 raw를 기준으로 재처리가 가능하다.
@@ -311,59 +344,48 @@ binance-iceberg-lakehouse/
 │   ├── operations.md
 │   ├── quicksight_metrics.md
 │   └── phase1_setup_guide.md
-├── collectors/
-│   ├── csv_to_kafka.py
-│   └── download_data.sh
-├── simulators/
-│   └── orders_simulator.py
-├── streams/
-│   ├── stream_raw_trades.py
-│   ├── stream_raw_klines.py
-│   └── stream_raw_orders.py
-├── dags/
+├── infra/
+│   ├── docker-compose.yml       # Kafka (Docker, KRaft)
+│   ├── download_data.sh         # Binance CSV 다운로드 스크립트
+│   └── csv_to_kafka.py          # CSV → Kafka producer
+├── code/
+│   ├── ddl/                     # Bronze / Silver / Gold DDL
+│   │   ├── 00_create_raw_tables.sql
+│   │   ├── 01_create_namespaces.sql
+│   │   ├── 02_create_processed_trades.sql
+│   │   ├── 03_create_processed_klines.sql
+│   │   ├── 04_create_processed_orders.sql
+│   │   ├── 05_create_serving_tables.sql
+│   │   ├── 06_create_observability_tables.sql
+│   │   └── 10_quicksight_views.sql
+│   ├── pipelines/               # 정제 · 집계 · MERGE 로직
+│   │   ├── common/spark_session.py
+│   │   ├── stream_raw_trades.py
+│   │   ├── stream_raw_klines.py
+│   │   ├── stream_raw_orders.py
+│   │   ├── orders_simulator.py
+│   │   ├── build_processed_trades.py
+│   │   ├── build_processed_klines.py
+│   │   ├── build_processed_orders.py
+│   │   ├── merge_kline_updates.py
+│   │   ├── merge_order_status_updates.py
+│   │   ├── build_market_hourly_summary.py
+│   │   ├── build_order_execution_summary.py
+│   │   ├── check_data_quality.py
+│   │   ├── check_table_health.py
+│   │   ├── compact_tables.py
+│   │   └── 07_merge_kline_updates.sql
+│   │   └── 08_merge_order_status_updates.sql
+│   └── health-queries/          # 운영 헬스 쿼리 (Phase 3~)
+│       └── 09_metadata_checks.sql
+├── orchestration/               # Airflow DAG
 │   ├── lakehouse_daily_pipeline.py
 │   └── iceberg_maintenance.py
-├── jobs/
-│   ├── common/spark_session.py
-│   ├── build_processed_trades.py
-│   ├── build_processed_klines.py
-│   ├── build_processed_orders.py
-│   ├── merge_kline_updates.py
-│   ├── merge_order_status_updates.py
-│   ├── build_market_hourly_summary.py
-│   ├── build_order_execution_summary.py
-│   ├── check_data_quality.py
-│   ├── check_table_health.py
-│   └── compact_tables.py
-├── sql/
-│   ├── 00_create_raw_tables.sql
-│   ├── 01_create_namespaces.sql
-│   ├── 02~09_*.sql
-│   └── (health_queries/ — Phase 3에서 추가)
-├── data/                 # gitignored
+├── dashboard/                   # BI 대시보드 스크린샷 (Phase 4~)
+├── data/                        # gitignored
 ├── tests/
-├── docker-compose.yml
 └── requirements.txt
 ```
-
-## 실행 안내
-
-### Phase 0 — 데이터 확보
-
-```bash
-./collectors/download_data.sh
-```
-
-Binance Historical data (data.binance.vision, MIT 라이선스).
-BTCUSDT 2024년 1~3월 trades + klines를 `data/raw/`에 다운로드한다.
-
-### Phase 1 — Kafka + Raw Zone
-
-상세 실행 순서는 `docs/phase1_setup_guide.md` 참조.
-
-(이후 Phase별 실행 절차는 해당 Phase 완료 시점에 추가한다)
-
----
 
 ## 참고 문서
 
@@ -374,4 +396,3 @@ BTCUSDT 2024년 1~3월 trades + klines를 `data/raw/`에 다운로드한다.
 - `docs/roadmap.md` — Phase별 작업 항목
 - `docs/operations.md` — 운영 지표 / Airflow / 임계값
 - `docs/quicksight_metrics.md` — 대시보드 지표 정의
-- `docs/phase1_setup_guide.md` — Phase 1 실행 가이드
