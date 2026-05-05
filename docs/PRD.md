@@ -111,7 +111,7 @@ Binance는 공개 market data stream으로 trade, aggregate trade, kline/candles
 
 `trades` 또는 `aggTrades`는 실제 시장 체결 데이터를 나타낸다.
 
-예상 필드:
+필드:
 
 - `symbol`
 - `trade_id` 또는 `agg_trade_id`
@@ -119,12 +119,13 @@ Binance는 공개 market data stream으로 trade, aggregate trade, kline/candles
 - `quantity`
 - `trade_time`
 - `is_buyer_maker`
+- `is_best_match`
 
 ### 6.2 Binance Klines
 
 `klines`는 특정 interval의 OHLCV 캔들 데이터다.
 
-예상 필드:
+필드:
 
 - `symbol`
 - `interval`
@@ -736,7 +737,7 @@ local Kafka
 데이터 규모가 local 환경을 넘어서면 다음 방향으로 확장한다.
 
 ```text
-Local Kafka + Local Spark + Local Warehouse
+Local Kafka + Local Spark + S3 + Glue Catalog
 → Docker Kafka/Spark Cluster
 → S3 + Glue Catalog
 → EMR / Glue Spark
