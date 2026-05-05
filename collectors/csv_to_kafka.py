@@ -57,7 +57,7 @@ KLINES_COLUMNS = [
     "ignore",
 ]
 
-MONTHS = [f"{m:02d}" for m in range(1, 4)]  # ["01", "02", ..., "12"]
+MONTHS = [f"{m:02d}" for m in range(1, 4)]  # ["01", "02", "3"]
 
 
 def make_producer() -> KafkaProducer:
