@@ -1,6 +1,6 @@
 #!/bin/bash
 # download_data.sh
-# BTCUSDT 2024년 1~12월 trades + klines 다운로드 및 압축 해제
+# BTCUSDT 2024년 1월 trades + klines 다운로드 및 압축 해제
 
 set -e  # 에러 나면 즉시 중단
 
@@ -10,7 +10,7 @@ SYMBOL="BTCUSDT"
 YEAR="2024"
 BASE_URL="https://data.binance.vision/data/spot/monthly"
 
-for m in 01 02 03; do
+for m in 01; do
 
     # trades
     TRADES_FILE="${SYMBOL}-trades-${YEAR}-${m}.zip"
