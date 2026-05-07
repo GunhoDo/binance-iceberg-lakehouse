@@ -8,16 +8,16 @@ source는 orders simulator이며 실데이터가 아니다 (PRD §2, §6.3).
 PRD §10.2, §14.1 참조.
 
 실행:
-    PYTHONPATH=. spark-submit \\
-        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \\
-        streams/stream_raw_orders.py
+    PYTHONPATH=. spark-submit \
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \
+      src/pipelines/stream_raw_orders.py
 """
 
 from __future__ import annotations
 
 from pyspark.sql import functions as F
 
-from src.pipelines.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark_streaming
 
 KAFKA_BOOTSTRAP = "localhost:9092"
 KAFKA_TOPIC = "orders"
@@ -43,9 +43,9 @@ def run() -> None:
         F.col("timestamp").cast("long").alias("kafka_timestamp"),
         F.col("key").cast("string").alias("message_key"),
         F.col("value").cast("string").alias("message_value"),
+        F.current_timestamp().cast("string").alias("ingest_time"),
         F.date_format(F.current_timestamp(), "yyyy").alias("year"),
         F.date_format(F.current_timestamp(), "MM").alias("month"),
-        F.current_timestamp().cast("string").alias("ingest_time"),
     )
 
     query = (
