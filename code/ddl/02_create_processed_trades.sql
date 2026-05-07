@@ -5,25 +5,30 @@
 --
 -- Write Pattern: Append (PRD §9).
 --
--- 보류 항목:
---   - 가격 / 수량 DECIMAL 정밀도 — PRD에 명시 없음, Phase 2에서 결정.
---   - PARTITIONED BY — 쿼리 패턴과 데이터 분포를 보고 결정 (decisions.md D9).
---   - TBLPROPERTIES — COW 기본값 외 옵션은 Phase 2에서 결정.
+-- processed_trades
+-- raw_trades의 message_value를 파싱한 Iceberg table.
+-- Write Pattern: Append (중복 제거 후 insert)
+-- spark에서 실행
 
--- TODO Phase 2
--- CREATE TABLE IF NOT EXISTS <catalog>.processed.processed_trades (
---     symbol            STRING,
---     trade_id          BIGINT,        -- 또는 STRING (agg_trade_id 포함 여부에 따라)
---     price             DECIMAL,       -- 정밀도 미정
---     quantity          DECIMAL,       -- 정밀도 미정
---     trade_time        TIMESTAMP,
---     is_buyer_maker    BOOLEAN,
---     source_topic      STRING,
---     source_partition  INT,
---     source_offset     BIGINT,
---     ingest_time       TIMESTAMP
--- )
--- USING iceberg
--- -- PARTITIONED BY (...)         -- decisions.md D9
--- -- TBLPROPERTIES (...)          -- COW 기본값, 추가 옵션은 Phase 2
--- ;
+CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.processed_trades (
+    trade_id          BIGINT,
+    symbol            STRING,
+    price             DECIMAL(20, 8),
+    qty               DECIMAL(20, 8),
+    quote_qty         DECIMAL(20, 8),
+    trade_time        TIMESTAMP,       -- time(ms) → timestamp 변환
+    is_buyer_maker    BOOLEAN,
+    is_best_match     BOOLEAN,
+    source_topic      STRING,
+    source_partition  INT,
+    source_offset     BIGINT,
+    ingest_time       STRING
+)
+USING iceberg
+PARTITIONED BY (days(trade_time))
+TBLPROPERTIES (
+    'format-version' = '2',
+    'write.update.mode' = 'copy-on-write',
+    'write.merge.mode' = 'copy-on-write',
+    'write.delete.mode' = 'copy-on-write'
+);
