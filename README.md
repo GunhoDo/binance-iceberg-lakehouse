@@ -335,56 +335,64 @@ incremental MERGE로 반영한다. 처리 실패 시 같은 구간을 다시 실
 ```
 binance-iceberg-lakehouse/
 ├── README.md
+├── requirements.txt
+│
 ├── docs/
 │   ├── PRD.md
-│   ├── decisions.md
 │   ├── architecture.md
-│   ├── simulator_design.md
-│   ├── roadmap.md
+│   ├── decisions.md
 │   ├── operations.md
 │   ├── quicksight_metrics.md
-│   └── phase1_setup_guide.md
+│   └── simulator_design.md
+│
 ├── infra/
-│   ├── docker-compose.yml       # Kafka (Docker, KRaft)
-│   ├── download_data.sh         # Binance CSV 다운로드 스크립트
-│   └── csv_to_kafka.py          # CSV → Kafka producer
-├── code/
-│   ├── ddl/                     # Bronze / Silver / Gold DDL
+│   ├── docker-compose.yml
+│   ├── download_data.sh
+│   └── csv_to_kafka.py
+│
+├── src/
+│   ├── ddl/
 │   │   ├── 00_create_raw_tables.sql
 │   │   ├── 01_create_namespaces.sql
 │   │   ├── 02_create_processed_trades.sql
 │   │   ├── 03_create_processed_klines.sql
-│   │   ├── 04_create_processed_orders.sql
-│   │   ├── 05_create_serving_tables.sql
-│   │   ├── 06_create_observability_tables.sql
-│   │   └── 10_quicksight_views.sql
-│   ├── pipelines/               # 정제 · 집계 · MERGE 로직
-│   │   ├── common/spark_session.py
+│   │   ├── 04_create_staging_klines.sql
+│   │   ├── 05_create_staging_orders.sql
+│   │   ├── 06_create_processed_orders.sql
+│   │   ├── 07_create_serving_tables.sql
+│   │   ├── 08_create_observability_tables.sql
+│   │   └── 09_quicksight_views.sql
+│   │
+│   ├── streams/
 │   │   ├── stream_raw_trades.py
 │   │   ├── stream_raw_klines.py
-│   │   ├── stream_raw_orders.py
-│   │   ├── orders_simulator.py
-│   │   ├── build_processed_trades.py
-│   │   ├── build_processed_klines.py
-│   │   ├── build_processed_orders.py
-│   │   ├── merge_kline_updates.py
-│   │   ├── merge_order_status_updates.py
-│   │   ├── build_market_hourly_summary.py
-│   │   ├── build_order_execution_summary.py
+│   │   └── stream_raw_orders.py
+│   │
+│   ├── pipelines/
+│   │   ├── 01_build_processed_trades.py
+│   │   ├── 02_build_processed_klines.py
+│   │   ├── 03_merge_kline_updates.sql
+│   │   ├── 04_build_processed_orders.py
+│   │   ├── 05_merge_order_status_updates.sql
+│   │   ├── 06_build_market_hourly_summary.py
+│   │   ├── 07_build_order_execution_summary.py
 │   │   ├── check_data_quality.py
 │   │   ├── check_table_health.py
 │   │   ├── compact_tables.py
-│   │   └── 07_merge_kline_updates.sql
-│   │   └── 08_merge_order_status_updates.sql
-│   └── health-queries/          # 운영 헬스 쿼리 (Phase 3~)
-│       └── 09_metadata_checks.sql
-├── orchestration/               # Airflow DAG
+│   │   └── common/
+│   │
+│   ├── simulators/
+│   │   └── orders_simulator.py
+│   │
+│   └── health-queries/
+│       └── 01_metadata_checks.sql
+│
+├── orchestration/
 │   ├── lakehouse_daily_pipeline.py
 │   └── iceberg_maintenance.py
-├── dashboard/                   # BI 대시보드 스크린샷 (Phase 4~)
-├── data/                        # gitignored
-├── tests/
-└── requirements.txt
+│
+├── dashboard/
+└── tests/
 ```
 
 ## 참고 문서
