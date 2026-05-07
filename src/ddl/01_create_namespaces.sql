@@ -23,6 +23,4 @@
 -- 단일 데이터베이스 안에 모든 테이블을 둔다.
 -- 레이어 구분은 테이블 이름 prefix로 한다 (raw_, processed_, serving_, ops_).
 --
--- Athena 또는 pyspark shell에서 실행한다.
-
-CREATE DATABASE IF NOT EXISTS binance_lakehouse;
+-- glue에서 create database로 만든다 sql문은 필요없다

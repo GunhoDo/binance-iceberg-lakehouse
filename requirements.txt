@@ -17,7 +17,7 @@
 # pyspark
 
 # Phase 0
-kafka-python==2.0.2
+kafka-python-ng
 
 # Phase 1
 pyspark==3.5.5

@@ -17,6 +17,10 @@ Binance의 `trades`와 `klines`는 공개 시장 데이터로 수집하고, user
 - kline/trade/order 기반 지표를 serving table로 사전 집계한다.
 - Iceberg metadata table을 이용해 파일 수, snapshot 수, compaction 필요 여부를 관찰한다.
 - Airflow와 QuickSight를 통해 파이프라인과 데이터 상태를 운영 지표로 확인한다.
+- kline update는 `staging_klines`에서 key 단위 dedup 후 `processed_klines`에 MERGE한다.
+- order status event는 `staging_orders`에서 최신 상태를 선별한 뒤 `processed_orders`에 MERGE한다.
+- update가 발생할 수 있는 `processed_klines`, `processed_orders`는 확장성을 고려해 MOR(Merge-on-Read) 기반으로 설계한다.
+- MOR table에서 발생할 수 있는 delete file과 manifest 증가는 Iceberg metadata table로 관찰하고, maintenance 단계에서 rewrite/compaction 정책을 적용한다.
 
 ---
 
@@ -61,10 +65,13 @@ Binance는 공개 market data stream으로 trade, aggregate trade, kline/candles
 - 주문 시뮬레이터를 통해 `orders` 이벤트를 생성한다.
 - Kafka topic을 이벤트 성격별로 분리한다.
 - Spark Structured Streaming으로 Kafka topic을 읽어 S3 Raw Zone에 append-only 저장한다.
-- Raw Zone을 기반으로 Iceberg processed tables를 생성한다.
+- Raw Zone을 기반으로 Iceberg staging/processed tables를 생성한다.
 - 주문 상태 변화 이벤트를 `processed_orders`에 `MERGE INTO`로 반영한다.
-- 진행 중인 kline update를 `processed_klines`에 최신 상태로 반영한다.
+- 진행 중인 kline update를 `staging_klines`에 정제한 뒤, MERGE 직전 key 단위 dedup을 거쳐 `processed_klines`에 최신 상태로 반영한다.
+- 주문 상태 이벤트를 `staging_orders`에 정제한 뒤, `order_id` 기준 최신 상태를 `processed_orders`에 MERGE한다.
 - market/order 지표를 serving tables로 사전 집계한다.
+- update가 발생하는 `processed_klines`, `processed_orders`는 확장성을 고려해 MOR 기반 Iceberg table로 설계한다.
+- MOR table의 delete file, manifest, snapshot 상태를 Iceberg metadata table로 확인한다.
 - Iceberg snapshot과 files metadata를 조회한다.
 - Compaction 전후 파일 개수와 평균 파일 크기를 비교한다.
 
@@ -204,6 +211,8 @@ Binance Public Market Data
           ↓
        raw_klines
           ↓
+       staging_klines
+          ↓
        processed_klines
 
 Order Simulator
@@ -211,6 +220,8 @@ Order Simulator
 Kafka topic: orders
    ↓
 raw_orders
+   ↓
+staging_orders
    ↓
 processed_orders
 
@@ -224,6 +235,8 @@ table_health_summary
    ↓
 QuickSight
 ```
+`staging_klines`와 `staging_orders`는 serving 대상 테이블이 아니라, MERGE source를 안정화하기 위한 중간 테이블이다. Raw Zone은 append-only로 원본 이벤트를 보존하고, staging table은 raw JSON을 정제한 이벤트 로그를 보관한다. processed table은 MERGE를 통해 최신 상태를 관리한다.
+
 
 Airflow 확장 후 구조는 다음과 같다.
 
@@ -236,11 +249,13 @@ Airflow Daily Pipeline DAG
    ↓
 build_processed_trades
    ↓
-build_processed_klines
+build_processed_klines        # raw_klines → staging_klines
    ↓
-build_processed_orders
+merge_kline_updates           # staging_klines → processed_klines
    ↓
-merge_order_status_updates
+build_processed_orders        # raw_orders → staging_orders
+   ↓
+merge_order_status_updates    # staging_orders → processed_orders
    ↓
 build_serving_summaries
    ↓
@@ -267,8 +282,10 @@ check_after_compaction
 | `raw_klines` | Binance kline event 원본 보관. interval 진행 중 같은 open_time으로 여러 event가 도착해도 모두 보관한다. | Append only, Streaming |
 | `raw_orders` | simulator가 생성한 주문 이벤트 원본 보관. 주문 상태 재처리와 시뮬레이터 검증에 사용한다. | Append only, Streaming |
 | `processed_trades` | raw trade event를 정제한 체결 단위 table이다. trade_id, price, quantity, trade_time 기준으로 분석한다. | Append |
+| `staging_klines` | raw kline event를 파싱·정규화한 MERGE source table이다. MERGE 직전 `(symbol, interval, open_time)` 기준 dedup에 사용한다. | Append |
 | `processed_klines` | raw kline event를 정제한 캔들 단위 table이다. symbol, interval, open_time 기준으로 OHLCV 최신 상태를 관리한다. | Append + MERGE |
-| `processed_orders` | 주문별 최신 상태를 관리한다. NEW, PARTIALLY_FILLED, FILLED, CANCELED 상태 변화가 발생하므로 MERGE가 필요하다. | Append + MERGE |
+| `staging_orders` | raw order event를 파싱·정규화한 MERGE source table이다. `order_id` 기준 최신 상태 선별에 사용한다. | Append |
+| `processed_orders` | 주문별 최신 상태를 관리한다. NEW, PARTIALLY_FILLED, FILLED, CANCELED 상태 변화가 발생하므로 MERGE가 필요하다. | MERGE |
 | `market_hourly_summary` | symbol/hour 기준 가격·거래량 KPI를 사전 집계한다. | MERGE, Incremental |
 | `order_execution_summary` | 주문 체결률, 취소율, 평균 체결 지연 등을 사전 집계한다. | MERGE, Incremental |
 | `data_quality_summary` | raw/processed row count, duplicate, null, freshness 지표를 저장한다. | Append only |
@@ -348,11 +365,23 @@ Raw Zone은 append-only로 유지한다. 수집기 오류, 파싱 오류, 집계
 
 ### 10.4 Processed Klines
 
-`processed_klines`는 raw kline event를 정제한 캔들 단위 Iceberg table이다.
+`processed_klines`는 kline update를 반영한 캔들 단위 Iceberg table이다.
 
 `trades`와 `klines`는 모두 market data이지만 분석 단위가 다르다. `trades`는 개별 체결 event이고, `klines`는 일정 interval의 OHLCV aggregate event이다. 따라서 processed layer에서도 이를 하나의 wide table로 합치지 않고 `processed_trades`, `processed_klines`로 분리한다.
 
-Kline은 interval이 닫히기 전까지 같은 `symbol`, `interval`, `open_time`에 대해 반복 업데이트될 수 있다. 따라서 processed layer에서는 `(symbol, interval, open_time)` 기준으로 최신 상태를 MERGE하고, `is_closed=true` event를 최종 캔들 상태로 취급한다.
+Kline은 interval이 닫히기 전까지 같은 `symbol`, `interval`, `open_time`에 대해 반복 업데이트될 수 있다. 따라서 Phase 2에서는 raw kline event를 먼저 `staging_klines`에 정제 적재하고, `processed_klines`에 MERGE하기 직전에 `(symbol, interval, open_time)` 기준으로 key 단위 dedup을 수행한다.
+
+MERGE 기준:
+
+- key: `(symbol, interval, open_time)`
+- dedup order: `source_offset DESC`, `updated_at DESC`
+- late event 방어: `source.source_offset >= target.source_offset`
+
+현재 Phase 2의 raw kline 데이터는 historical kline 형태이며 `is_closed` 또는 Binance WebSocket close flag `x`가 없다. 따라서 Phase 2에서는 모든 kline을 이미 종료된 캔들로 보고 `is_closed = true`로 적재한다. 향후 WebSocket 기반 실시간 kline 수집으로 확장할 경우 raw message에 `x` 또는 `is_closed` 필드를 포함하고, processed layer에서 이를 `BOOLEAN`으로 변환한다.
+
+`processed_klines`는 반복 update 가능성이 있는 table이므로 MOR(Merge-on-Read)로 설계한다. 이는 실시간 kline stream에서 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 여러 번 갱신될 수 있기 때문이다.
+
+MOR 적용 후에는 delete file 증가와 read amplification을 Iceberg metadata table로 관찰하고, maintenance 단계에서 compaction/rewrite 정책을 적용한다.
 
 주요 컬럼:
 
@@ -373,8 +402,6 @@ Kline은 interval이 닫히기 전까지 같은 `symbol`, `interval`, `open_time
 - `source_offset`
 - `updated_at`
 
----
-
 ### 10.5 Processed Orders
 
 `processed_orders`는 주문별 최신 상태를 관리하는 Iceberg table이다.
@@ -394,7 +421,18 @@ NEW
 → CANCELED
 ```
 
-따라서 `processed_orders`는 신규 주문 append와 상태 변경 MERGE를 모두 지원해야 한다.
+Raw Zone은 모든 주문 상태 이벤트를 append-only로 보관한다. Phase 2에서는 raw order event를 먼저 `staging_orders`에 정제 적재하고, `processed_orders`에 MERGE하기 직전에 `order_id` 기준으로 최신 이벤트를 선택한다.
+
+MERGE 기준:
+
+- key: `order_id`
+- dedup order: `event_time DESC`, `status_rank DESC`, `source_offset DESC`
+- 상태 우선순위: `NEW=1`, `PARTIALLY_FILLED=2`, `FILLED=3`, `CANCELED=3`
+- late event 방어: `source.updated_at >= target.updated_at`
+
+`processed_orders`는 주문별 최신 상태 table이며, 같은 `order_id`에 대해 상태 전이가 발생한다. 따라서 향후 주문 이벤트 규모와 상태 update 빈도 증가를 고려해 MOR(Merge-on-Read)로 설계한다.
+
+MOR 적용 후에는 delete file과 manifest 증가를 Iceberg metadata table로 관찰하고, maintenance 단계에서 rewrite/compaction 정책을 적용한다.
 
 주요 컬럼:
 
@@ -411,6 +449,7 @@ NEW
 - `updated_at`
 - `filled_at`
 - `canceled_at`
+- `simulated_parameters`
 - `source_topic`
 - `source_partition`
 - `source_offset`
@@ -454,20 +493,28 @@ NEW
 
 ## 11. Iceberg Table Mode
 
-본 MVP는 COW(Copy-on-Write)를 기본으로 한다. 이유는 구현 단순성, 읽기 성능, snapshot 비교의 명확성이다.
+본 MVP는 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merge-on-Read)를 구분해 사용한다.
+
+- append-only 성격이 강한 table은 COW 또는 append 중심으로 유지한다.
+- row-level update / MERGE 빈도가 증가할 수 있는 table은 MOR를 사용한다.
+- dashboard 조회 중심의 serving table은 COW를 유지한다.
 
 | Table | Mode | Reason |
 |---|---|---|
-| `processed_trades` | COW | append 중심이며 읽기/검증이 중요하다. |
-| `processed_klines` | COW | kline update MERGE를 실험하되, MVP에서는 데이터 규모가 작고 snapshot 비교가 중요하다. |
-| `processed_orders` | COW | 주문 상태 MERGE를 실험하되, MVP에서는 데이터 규모가 작고 snapshot 비교가 중요하다. |
-| `market_hourly_summary` | COW | QuickSight 조회 중심의 read-heavy table이다. |
-| `order_execution_summary` | COW | QuickSight 조회 중심의 read-heavy table이다. |
+| `processed_trades` | COW / Append | 체결 단위 append-only event이며 기존 row update가 거의 없다. MOR의 이점이 낮고, 읽기와 검증이 중요하다. |
+| `staging_klines` | Append only | raw kline을 정제한 MERGE source table이다. 최신 상태 관리는 `processed_klines`에서 수행한다. |
+| `processed_klines` | MOR | 실시간 kline stream에서는 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 반복 update될 수 있다. 향후 데이터 증가와 update 빈도 증가를 고려해 MOR로 설계한다. |
+| `staging_orders` | Append only | raw order event를 정제한 MERGE source table이다. 주문 최신 상태 관리는 `processed_orders`에서 수행한다. |
+| `processed_orders` | MOR | `order_id` 기준으로 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다. 상태 update 빈도가 증가할 수 있으므로 MOR로 설계한다. |
+| `market_hourly_summary` | COW | QuickSight 조회 중심의 read-heavy serving table이다. |
+| `order_execution_summary` | COW | QuickSight 조회 중심의 read-heavy serving table이다. |
 | `data_quality_summary` | Append only | 실행별 품질 지표를 누적한다. |
 | `pipeline_run_summary` | Append only | 실행별 파이프라인 결과를 누적한다. |
 | `table_health_summary` | Append only | Iceberg table health 지표를 시간순으로 누적한다. |
 
-확장 단계에서 kline update 또는 order status update 빈도가 높아져 row-level update 비용이 커지면 `processed_klines` 또는 `processed_orders`에 MOR(Merge-on-Read) 적용을 검토한다. 다만 summary/serving table은 대시보드 조회가 많으므로 COW를 우선 유지한다.
+`processed_klines`와 `processed_orders`는 MOR를 사용하므로 delete file과 manifest 증가를 관찰해야 한다. Phase 3 Maintenance 단계에서는 `rewrite_data_files`, `rewrite_manifests`, snapshot expiration 등 Iceberg maintenance 작업을 통해 MOR table의 read amplification과 metadata 증가를 관리한다.
+
+Serving table은 dashboard와 BI 조회가 중심이므로 MOR가 아니라 COW를 유지한다.
 
 ---
 
@@ -475,34 +522,35 @@ NEW
 
 ### 12.1 Order Status MERGE Check
 
-`orders` event 반영 전후로 `processed_orders` snapshot을 확인한다.
+`staging_orders`를 `processed_orders`에 MERGE하기 전후로 snapshot을 확인한다.
 
 확인 대상:
 
-- snapshot id
-- commit time
-- operation type
-- updated order count
-- order_status 변화
-
-예시:
-
-```text
-O001: NEW
-→ O001: PARTIALLY_FILLED
-→ O001: FILLED
-```
+- 같은 `order_id`에 대한 상태 이벤트 sequence
+- `NEW → FILLED`, `NEW → CANCELED`, `NEW → PARTIALLY_FILLED → FILLED` 상태 전이
+- MERGE 후 `processed_orders`에 `order_id`당 하나의 row만 남는지
+- `filled_at`, `canceled_at` 반영 여부
+- snapshot 변화
 
 ### 12.2 Kline Update MERGE Check
 
-`klines` event 반영 전후로 `processed_klines` snapshot을 확인한다.
+`staging_klines`를 `processed_klines`에 MERGE하기 전후로 snapshot을 확인한다.
 
 확인 대상:
 
-- 같은 `symbol`, `interval`, `open_time`에 대한 반복 update
-- `is_closed=false` 상태의 갱신
-- `is_closed=true` 최종 캔들 반영
-- snapshot 변화
+- `staging_klines`에 정제된 kline update가 적재되었는지
+- 같은 `symbol`, `interval`, `open_time`에 대한 반복 update가 dedup되는지
+- MERGE source에서 `ROW_NUMBER()` 기준 최신 row만 선택되는지
+- `processed_klines` snapshot 변화
+- MERGE 전후 record count와 sample row 변화
+
+Phase 2 기준 dedup 전략:
+
+```text
+PARTITION BY symbol, interval, open_time
+ORDER BY source_offset DESC, updated_at DESC
+```
+Phase 2의 historical kline 데이터는 close flag가 없으므로 is_closed=true로 처리한다. 실시간 WebSocket kline으로 확장할 경우 is_closed=false 중간 업데이트와 is_closed=true 최종 캔들 반영을 추가로 검증한다.
 
 ### 12.3 Metadata Check
 
@@ -531,6 +579,29 @@ Streaming write로 작은 파일이 여러 개 생성된 상태에서 compaction
 | Average file size | TBD | TBD |
 | Snapshot count | TBD | TBD |
 | Query time | TBD | TBD |
+
+### 12.5 MOR Delete File Check
+
+`processed_klines`와 `processed_orders`는 MOR table이므로 MERGE 이후 Iceberg metadata table에서 data file과 delete file 분포를 확인한다.
+
+확인 대상:
+
+- `files.content` 분포
+- data file count
+- delete file count
+- average file size
+- manifest count
+- snapshot 변화
+
+예시:
+
+```sql
+SELECT content, COUNT(*) AS file_count
+FROM glue.binance_lakehouse.processed_orders.files
+GROUP BY content;
+```
+
+MOR table은 write 비용을 줄이는 대신 read amplification과 delete file 누적이 발생할 수 있으므로, Phase 3 maintenance에서 `rewrite_data_files`, `rewrite_manifests`, snapshot expiration을 검증한다.
 
 ---
 
@@ -591,6 +662,10 @@ Streaming write로 작은 파일이 여러 개 생성된 상태에서 compaction
 - last commit time
 - last compaction time
 - compaction needed flag
+- data file count
+- delete file count
+- delete/data file ratio
+- manifest count
 
 ### 13.5 Monitoring Thresholds
 
@@ -607,6 +682,9 @@ Streaming write로 작은 파일이 여러 개 생성된 상태에서 compaction
 | `small_file_count` | `> 10` |
 | `snapshot_count` | `> 20` |
 | `last_successful_run_hours` | `> 24` |
+| `delete_file_count` | `> 10` |
+| `delete_to_data_file_ratio` | `> 0.5` |
+| `manifest_count` | `> 20` |
 
 ---
 
@@ -630,7 +708,9 @@ Kafka 수집기와 streaming job은 장기 실행 프로세스다.
 ```text
 build_processed_trades
    ↓
-build_processed_klines
+build_processed_klines        # raw_klines → staging_klines
+   ↓
+merge_kline_updates           # staging_klines → processed_klines
    ↓
 build_processed_orders
    ↓
@@ -731,6 +811,10 @@ local Kafka
 - batch size
 - Iceberg target file size
 - compaction 주기
+- MOR table의 delete file 증가율
+- read amplification
+- rewrite_data_files 주기
+- rewrite_manifests 주기
 
 ### 16.3 Scale-out
 
@@ -771,13 +855,19 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 ### Phase 2. Iceberg Core MVP
 
 - `processed_trades` 구현
+- `staging_klines` 구현
 - `processed_klines` 구현
+- `staging_orders` 구현
 - `processed_orders` 구현
 - kline update MERGE 구현
 - order status MERGE 구현
 - `market_hourly_summary` 구현
 - `order_execution_summary` 구현
 - Snapshot 및 metadata table 확인
+- `processed_klines`, `processed_orders` MOR table mode 적용
+- MOR table의 data/delete file 분포 확인
+- MOR table maintenance 정책 검증
+- delete file rewrite / data file compaction / manifest rewrite 실험
 - Compaction 전후 비교
 
 ### Phase 3. Observability + Airflow
@@ -812,8 +902,11 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - Order simulator가 주문 이벤트를 생성할 수 있다.
 - Kafka `trades`, `klines`, `orders` topic에 이벤트를 발행할 수 있다.
 - Kafka event를 Raw Zone에 append-only 저장할 수 있다.
-- Raw Zone에서 `processed_trades`, `processed_klines`, `processed_orders` Iceberg table을 생성할 수 있다.
-- Kline update를 `processed_klines`에 `MERGE INTO`로 반영할 수 있다.
+- Raw Zone에서 `processed_trades`, `staging_klines`, `processed_klines`, `processed_orders` Iceberg table을 생성할 수 있다.
+- Raw kline event를 `staging_klines`에 정제 적재할 수 있다.
+- `staging_klines`의 kline update를 key 단위 dedup 후 `processed_klines`에 `MERGE INTO`로 반영할 수 있다.
+- Raw order event를 `staging_orders`에 정제 적재할 수 있다.
+- `staging_orders`의 order status event를 `order_id` 기준 최신 상태로 dedup 후 `processed_orders`에 `MERGE INTO`로 반영할 수 있다.
 - Order status update를 `processed_orders`에 `MERGE INTO`로 반영할 수 있다.
 - MERGE 전후 snapshot을 확인할 수 있다.
 - `market_hourly_summary`와 `order_execution_summary`를 생성할 수 있다.

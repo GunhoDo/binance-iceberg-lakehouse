@@ -17,7 +17,7 @@ PRD §13.2의 데이터 품질 지표를 측정해 data_quality_summary 에 appe
 
 from __future__ import annotations
 
-from jobs.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark
 
 
 def run() -> None:

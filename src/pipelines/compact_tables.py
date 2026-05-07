@@ -11,7 +11,7 @@ Iceberg compaction 실행. PRD §12.4, §14.3 참조.
 
 from __future__ import annotations
 
-from jobs.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark
 
 
 # Maintenance DAG가 처리할 대상 (PRD §14.3 의 compact_processed_tables /

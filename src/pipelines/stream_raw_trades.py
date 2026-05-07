@@ -1,32 +1,31 @@
-"""stream_raw_orders.py
+"""stream_raw_trades.py
 
-Kafka topic `orders` → S3 plain Parquet (append-only).
+Kafka topic `trades` → S3 plain Parquet (append-only).
 
 Raw Zone은 Iceberg가 아니다 (decisions.md D7).
-source는 orders simulator이며 실데이터가 아니다 (PRD §2, §6.3).
 
-PRD §10.2, §14.1 참조.
+PRD §10.1, §14.1 참조.
 
 실행:
     PYTHONPATH=. spark-submit \\
         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \\
-        streams/stream_raw_orders.py
+        src/pipelines/stream_raw_trades.py
 """
 
 from __future__ import annotations
 
 from pyspark.sql import functions as F
 
-from jobs.common.spark_session import get_spark_streaming
+from src.pipelines.common.spark_session import get_spark_streaming
 
 KAFKA_BOOTSTRAP = "localhost:9092"
-KAFKA_TOPIC = "orders"
-OUTPUT_PATH = "s3a://binance-iceberg-lake/raw/orders/"
-CHECKPOINT_PATH = "s3a://binance-iceberg-lake/checkpoints/raw_orders/"
+KAFKA_TOPIC = "trades"
+OUTPUT_PATH = "s3a://binance-iceberg-lake/raw/trades/"
+CHECKPOINT_PATH = "s3a://binance-iceberg-lake/checkpoints/raw_trades/"
 
 
 def run() -> None:
-    spark = get_spark_streaming("stream_raw_orders")
+    spark = get_spark_streaming("stream_raw_trades")
 
     kafka_df = (
         spark.readStream.format("kafka")
