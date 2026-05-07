@@ -22,7 +22,7 @@ Iceberg metadata 기반 운영 지표를 측정해 table_health_summary 에 appe
 
 from __future__ import annotations
 
-from code.pipelines.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark
 
 
 # PRD §11에 정의된 본 프로젝트의 Iceberg table 목록.

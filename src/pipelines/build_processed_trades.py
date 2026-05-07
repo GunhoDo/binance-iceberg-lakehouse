@@ -28,7 +28,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from code.pipelines.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark
 
 RAW_PATH = "s3a://binance-iceberg-lake/raw/trades/"
 TARGET_TABLE = "glue.binance_lakehouse.processed_trades"

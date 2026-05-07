@@ -16,7 +16,7 @@ PRD §10.5 참조.
 
 from __future__ import annotations
 
-from code.pipelines.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark
 
 
 def run() -> None:
