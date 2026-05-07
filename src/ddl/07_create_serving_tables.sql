@@ -9,52 +9,68 @@
 -- market_hourly_summary
 -- ----------------------------------------------------------------------------
 --
--- source: processed_klines (OHLCV 기준) + processed_trades (보조 지표).
--- key: (symbol, hour bucket)
--- write pattern: MERGE, Incremental (PRD §9)
+-- source: processed_klines (OHLCV 기준) + processed_trades (보조 지표)
+-- key: (symbol, summary_hour)
+-- write pattern: MERGE
+-- table mode: COW
+-- Phase 2 MVP: full aggregation 후 동일 key는 UPDATE, 신규 key는 INSERT
+-- Future: Airflow execution window 기준 incremental aggregation
 
--- TODO Phase 2
--- CREATE TABLE IF NOT EXISTS <catalog>.serving.market_hourly_summary (
---     symbol            STRING,
---     window_start      TIMESTAMP,    -- hour bucket
---     window_end        TIMESTAMP,
---     open_price        DECIMAL,
---     close_price       DECIMAL,
---     high_price        DECIMAL,
---     low_price         DECIMAL,
---     trade_volume      DECIMAL,
---     quote_volume      DECIMAL,
---     number_of_trades  BIGINT,
---     average_trade_size DECIMAL,
---     volatility_proxy  DECIMAL,
---     updated_at        TIMESTAMP
--- )
--- USING iceberg
--- -- PARTITIONED BY (...)
--- ;
+CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.market_hourly_summary (
+    summary_hour             TIMESTAMP,
+    symbol                   STRING,
+
+    open_price               DECIMAL(20, 8),
+    high_price               DECIMAL(20, 8),
+    low_price                DECIMAL(20, 8),
+    close_price              DECIMAL(20, 8),
+
+    kline_volume             DECIMAL(30, 8),
+    kline_quote_volume       DECIMAL(30, 8),
+    kline_number_of_trades   BIGINT,
+
+    trade_count              BIGINT,
+    trade_qty                DECIMAL(30, 8),
+    trade_quote_qty          DECIMAL(30, 8),
+    avg_trade_price          DECIMAL(20, 8),
+    maker_trade_count        BIGINT,
+    taker_trade_count        BIGINT,
+
+    updated_at               TIMESTAMP
+)
+USING iceberg
+PARTITIONED BY (days(summary_hour))
+TBLPROPERTIES (
+    'format-version' = '2',
+    'write.update.mode' = 'copy-on-write',
+    'write.merge.mode' = 'copy-on-write',
+    'write.delete.mode' = 'copy-on-write'
+);
 
 -- ----------------------------------------------------------------------------
 -- order_execution_summary
 -- ----------------------------------------------------------------------------
---
--- source: processed_orders.
--- key: (symbol, hour bucket)  -- 또는 다른 grain. Phase 2에서 결정.
 
--- TODO Phase 2
--- CREATE TABLE IF NOT EXISTS <catalog>.serving.order_execution_summary (
---     symbol                  STRING,
---     window_start            TIMESTAMP,
---     window_end              TIMESTAMP,
---     total_orders            BIGINT,
---     filled_orders           BIGINT,
---     canceled_orders         BIGINT,
---     partial_filled_orders   BIGINT,
---     fill_rate               DECIMAL,
---     cancel_rate             DECIMAL,
---     average_fill_delay_sec  DECIMAL,
---     average_slippage_proxy  DECIMAL,
---     updated_at              TIMESTAMP
--- )
--- USING iceberg
--- -- PARTITIONED BY (...)
--- ;
+CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.order_execution_summary (
+    summary_hour          TIMESTAMP,
+    symbol                STRING,
+    total_orders          BIGINT,
+    filled_orders         BIGINT,
+    canceled_orders       BIGINT,
+    fill_rate             DOUBLE,
+    cancel_rate           DOUBLE,
+    avg_fill_delay_sec    DOUBLE,
+    avg_order_qty         DECIMAL(20, 8),
+    avg_filled_qty        DECIMAL(20, 8),
+    total_order_qty       DECIMAL(30, 8),
+    total_filled_qty      DECIMAL(30, 8),
+    updated_at            TIMESTAMP
+)
+USING iceberg
+PARTITIONED BY (days(summary_hour))
+TBLPROPERTIES (
+    'format-version' = '2',
+    'write.update.mode' = 'copy-on-write',
+    'write.merge.mode' = 'copy-on-write',
+    'write.delete.mode' = 'copy-on-write'
+);

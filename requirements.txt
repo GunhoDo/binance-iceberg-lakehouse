@@ -21,3 +21,8 @@ kafka-python-ng
 
 # Phase 1
 pyspark==3.5.5
+
+# experiment
+# jupyterlab
+# ipykernel
+# pandastabulate
