@@ -157,21 +157,52 @@ MVP의 모든 processed/serving table은 COW (Copy-on-Write) 로 시작한다.
 - `processed_klines`: 같은 `(symbol, interval, open_time)` 키에 대해 interval이 닫히기 전까지 반복 update가 도착할 수 있다.
 - `processed_orders`: 같은 `order_id`에 대해 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다.
 
-### MERGE 입력 dedup 전략
+### Staging table 사용
 
-`MERGE INTO`의 source 안에 같은 target key가 여러 번 존재하면 하나의 target row에 여러 source row가 매칭될 수 있다. 따라서 MERGE 직전에 key 단위 dedup을 수행한다.
+Phase 2 MVP에서는 MERGE source를 안정화하기 위해 staging table을 사용한다.
 
-- `processed_klines`: `(symbol, interval, open_time)` 기준으로 dedup
-- 정렬 기준: `source_offset DESC`
-- 선택 row: 가장 최신 Kafka offset row
+- `raw_klines → staging_klines → processed_klines`
+- `raw_orders → staging_orders → processed_orders`
 
-현재 Phase 2에서는 raw kline이 historical kline 형태이므로 `is_closed = true`로 처리한다. 향후 실시간 WebSocket kline으로 확장하면 `is_closed` 또는 Binance close flag `x`를 함께 사용해 최종 캔들 여부를 판단한다.
+staging table은 정제된 이벤트 로그이며 append 방식으로 유지한다.  
+processed table에 MERGE하기 직전에 key 단위 dedup을 수행한다.
 
-### Late event 처리
+### Kline dedup 전략
 
-Phase 2에서는 우선 `source_offset >= target.source_offset` 조건으로 오래된 source row가 최신 target row를 덮어쓰지 않도록 한다.
+`processed_klines`는 다음 기준으로 MERGE source를 dedup한다.
 
-향후 multi-partition 또는 event-time 기반 late event 처리가 필요해지면 `updated_at`, `open_time`, `is_closed`를 함께 고려한 조건으로 확장한다.
+- key: `(symbol, interval, open_time)`
+- order: `source_offset DESC, updated_at DESC`
+
+late event 방어는 다음 조건으로 처리한다.
+
+```sql
+source.source_offset >= target.source_offset
+```
+
+### Order dedup 전략
+
+`processed_orders`는 다음 기준으로 MERGE source를 dedup한다.
+
+- key: `order_id`
+- order: `event_time DESC, status_rank DESC, source_offset DESC`
+
+상태 우선순위는 다음과 같다.
+
+| order_status | status_rank |
+|---|---:|
+| `NEW` | 1 |
+| `PARTIALLY_FILLED` | 2 |
+| `FILLED` | 3 |
+| `CANCELED` | 3 |
+
+late event 방어는 다음 조건으로 처리한다.
+
+```sql
+source.updated_at >= target.updated_at
+```
+
+향후 Airflow 도입 시에는 `batch_id` 또는 `run_id`를 추가해 실행 단위별 staging 관리를 확장한다.
 
 ---
 
@@ -215,14 +246,11 @@ Apache Iceberg를 사용한다.
 
 ---
 
-## D9. 보류한 결정 (현재 코드에 적지 않는 항목)
-
-다음 항목은 현재 PRD와 코드에 구체값을 적지 않는다. 임의로 적으면 "고민 없이
-LLM이 적은 값"이 되므로, 데이터를 보고 결정한다.
+## D9. 보류한 결정과 Phase 2에서 확정한 항목
 
 | 항목 | 보류 이유 | 결정 시점 | 결정 내용 | 결정 이유 |
 |---|---|---|---|---|
-| Partition spec (`days(...)`, `bucket(...)` 등) | 실제 쿼리 패턴과 데이터 분포를 보고 결정해야 의미가 있다. | Phase 2 후반 | `processed_trades`: `days(trade_time)`<br>`processed_klines`: `days(open_time)` | Raw는 ingest time 기준으로 보관하지만, Processed layer는 이벤트 시간 기준 조회/집계가 중심이므로 trade/kline event time 기준으로 파티셔닝한다. |
+| Partition spec (`days(...)`, `bucket(...)` 등) | 실제 쿼리 패턴과 데이터 분포를 보고 결정해야 의미가 있다. | Phase 2 후반 | `processed_trades`: `days(trade_time)`<br>`staging_klines`: `days(open_time)`<br>`processed_klines`: `days(open_time)`<br>`staging_orders`: `days(event_time)`<br>`processed_orders`: `days(updated_at)` | Raw는 ingest time 기준으로 보관하지만, Processed/Staging layer는 event time 또는 상태 갱신 시간 기준 조회·MERGE가 중심이므로 각 도메인 시간 컬럼 기준으로 파티셔닝한다. |
 | `write.target-file-size-bytes` | streaming trigger interval과 함께 결정. | Phase 2 |  |  |
 | Streaming trigger interval | 데이터 유입량을 보고 결정. | Phase 1 후반 | `30 seconds` | Phase 1에서는 빠른 수집 검증이 우선이므로 짧은 trigger interval을 사용했다. small file 발생 여부는 이후 S3 파일 크기와 compaction 실험에서 확인한다. |
 | Compaction 주기 | small file 발생률을 본 뒤 결정. | Phase 3 |  |  |
@@ -276,10 +304,34 @@ MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
 
 ### D14. Staging table 운영 방식
 
-Phase 2 MVP에서는 `staging_klines`를 MERGE source로 사용한다.  
-staging table은 append 방식으로 유지하고, MERGE 직전에 `(symbol, interval, open_time)` 기준으로 dedup한다.
+Phase 2 MVP에서는 MERGE source를 안정화하기 위해 staging table을 사용한다.
+
+- `raw_klines → staging_klines → processed_klines`
+- `raw_orders → staging_orders → processed_orders`
+
+staging table은 정제된 이벤트 로그를 append 방식으로 유지한다.  
+processed table에 MERGE하기 직전, 동일한 target key가 여러 번 포함될 가능성을 고려해 `ROW_NUMBER()` 기반 dedup을 수행한다.
+
+Dedup key는 다음과 같다.
+
+- `staging_klines`: `(symbol, interval, open_time)`
+- `staging_orders`: `order_id`
+
+현재 테스트 데이터에서 duplicate key가 항상 관찰되는 것은 아니지만, 실시간 kline update와 주문 상태 전이 이벤트를 고려해 dedup 로직을 기본 설계로 둔다.
 
 향후 Airflow 도입 시 `batch_id` 또는 `run_id`를 추가해 실행 단위별 staging 관리로 확장한다.
+
+## D15. Order simulator metadata 저장 방식
+
+`orders` simulator는 각 이벤트에 `simulated_parameters`를 포함한다.
+
+Phase 2에서는 `simulated_parameters`를 구조화된 Map/Struct로 강제 파싱하지 않고 JSON string으로 보존한다.
+
+이유는 `simulated_parameters` 내부에 숫자, 배열, 문자열이 함께 존재하므로 Iceberg/Athena 호환성을 고려하면 STRING 보존이 가장 단순하고 안전하기 때문이다.
+
+향후 simulator parameter 분석이 필요해지면 별도 schema를 정의해 struct column 또는 별도 config table로 분리한다.
+
+---
 
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 

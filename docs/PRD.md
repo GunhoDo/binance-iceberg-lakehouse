@@ -17,7 +17,8 @@ Binance의 `trades`와 `klines`는 공개 시장 데이터로 수집하고, user
 - kline/trade/order 기반 지표를 serving table로 사전 집계한다.
 - Iceberg metadata table을 이용해 파일 수, snapshot 수, compaction 필요 여부를 관찰한다.
 - Airflow와 QuickSight를 통해 파이프라인과 데이터 상태를 운영 지표로 확인한다.
-- kline update는 MERGE 직전 staging table에서 key 단위 dedup을 수행하여 안정적으로 반영한다.
+- kline update는 `staging_klines`에서 key 단위 dedup 후 `processed_klines`에 MERGE한다.
+- order status event는 `staging_orders`에서 최신 상태를 선별한 뒤 `processed_orders`에 MERGE한다.
 
 ---
 
@@ -65,6 +66,7 @@ Binance는 공개 market data stream으로 trade, aggregate trade, kline/candles
 - Raw Zone을 기반으로 Iceberg staging/processed tables를 생성한다.
 - 주문 상태 변화 이벤트를 `processed_orders`에 `MERGE INTO`로 반영한다.
 - 진행 중인 kline update를 `staging_klines`에 정제한 뒤, MERGE 직전 key 단위 dedup을 거쳐 `processed_klines`에 최신 상태로 반영한다.
+- 주문 상태 이벤트를 `staging_orders`에 정제한 뒤, `order_id` 기준 최신 상태를 `processed_orders`에 MERGE한다.
 - market/order 지표를 serving tables로 사전 집계한다.
 - Iceberg snapshot과 files metadata를 조회한다.
 - Compaction 전후 파일 개수와 평균 파일 크기를 비교한다.
@@ -215,6 +217,8 @@ Kafka topic: orders
    ↓
 raw_orders
    ↓
+staging_orders
+   ↓
 processed_orders
 
 processed_trades + processed_klines + processed_orders
@@ -227,7 +231,7 @@ table_health_summary
    ↓
 QuickSight
 ```
-`staging_klines`는 serving 대상 테이블이 아니라, `processed_klines` MERGE source를 안정화하기 위한 중간 테이블이다. 같은 `(symbol, interval, open_time)` 키가 MERGE 입력 안에 여러 번 존재할 수 있으므로, MERGE 직전에 key 단위 dedup을 수행한다.
+`staging_klines`와 `staging_orders`는 serving 대상 테이블이 아니라, MERGE source를 안정화하기 위한 중간 테이블이다. Raw Zone은 append-only로 원본 이벤트를 보존하고, staging table은 raw JSON을 정제한 이벤트 로그를 보관한다. processed table은 MERGE를 통해 최신 상태를 관리한다.
 
 
 Airflow 확장 후 구조는 다음과 같다.
@@ -245,9 +249,9 @@ build_processed_klines        # raw_klines → staging_klines
    ↓
 merge_kline_updates           # staging_klines → processed_klines
    ↓
-build_processed_orders
+build_processed_orders        # raw_orders → staging_orders
    ↓
-merge_order_status_updates
+merge_order_status_updates    # staging_orders → processed_orders
    ↓
 build_serving_summaries
    ↓
@@ -276,7 +280,8 @@ check_after_compaction
 | `processed_trades` | raw trade event를 정제한 체결 단위 table이다. trade_id, price, quantity, trade_time 기준으로 분석한다. | Append |
 | `staging_klines` | raw kline event를 파싱·정규화한 MERGE source table이다. MERGE 직전 `(symbol, interval, open_time)` 기준 dedup에 사용한다. | Append |
 | `processed_klines` | raw kline event를 정제한 캔들 단위 table이다. symbol, interval, open_time 기준으로 OHLCV 최신 상태를 관리한다. | Append + MERGE |
-| `processed_orders` | 주문별 최신 상태를 관리한다. NEW, PARTIALLY_FILLED, FILLED, CANCELED 상태 변화가 발생하므로 MERGE가 필요하다. | Append + MERGE |
+| `staging_orders` | raw order event를 파싱·정규화한 MERGE source table이다. `order_id` 기준 최신 상태 선별에 사용한다. | Append |
+| `processed_orders` | 주문별 최신 상태를 관리한다. NEW, PARTIALLY_FILLED, FILLED, CANCELED 상태 변화가 발생하므로 MERGE가 필요하다. | MERGE |
 | `market_hourly_summary` | symbol/hour 기준 가격·거래량 KPI를 사전 집계한다. | MERGE, Incremental |
 | `order_execution_summary` | 주문 체결률, 취소율, 평균 체결 지연 등을 사전 집계한다. | MERGE, Incremental |
 | `data_quality_summary` | raw/processed row count, duplicate, null, freshness 지표를 저장한다. | Append only |
@@ -408,7 +413,16 @@ NEW
 → CANCELED
 ```
 
-따라서 `processed_orders`는 신규 주문 append와 상태 변경 MERGE를 모두 지원해야 한다.
+Raw Zone은 모든 주문 상태 이벤트를 append-only로 보관한다. Phase 2에서는 raw order event를 먼저 `staging_orders`에 정제 적재하고, `processed_orders`에 MERGE하기 직전에 `order_id` 기준으로 최신 이벤트를 선택한다.
+
+MERGE 기준:
+
+- key: `order_id`
+- dedup order: `event_time DESC`, `status_rank DESC`, `source_offset DESC`
+- 상태 우선순위: `NEW=1`, `PARTIALLY_FILLED=2`, `FILLED=3`, `CANCELED=3`
+- late event 방어: `source.updated_at >= target.updated_at`
+
+`processed_orders`는 order event log가 아니라 주문별 최신 상태 table이다. 따라서 최종적으로 `order_id`당 하나의 row만 유지한다.
 
 주요 컬럼:
 
@@ -425,6 +439,7 @@ NEW
 - `updated_at`
 - `filled_at`
 - `canceled_at`
+- `simulated_parameters`
 - `source_topic`
 - `source_partition`
 - `source_offset`
@@ -489,23 +504,16 @@ NEW
 
 ### 12.1 Order Status MERGE Check
 
-`orders` event 반영 전후로 `processed_orders` snapshot을 확인한다.
+`staging_orders`를 `processed_orders`에 MERGE하기 전후로 snapshot을 확인한다.
 
 확인 대상:
 
-- snapshot id
-- commit time
-- operation type
-- updated order count
-- order_status 변화
+- 같은 `order_id`에 대한 상태 이벤트 sequence
+- `NEW → FILLED`, `NEW → CANCELED`, `NEW → PARTIALLY_FILLED → FILLED` 상태 전이
+- MERGE 후 `processed_orders`에 `order_id`당 하나의 row만 남는지
+- `filled_at`, `canceled_at` 반영 여부
+- snapshot 변화
 
-예시:
-
-```text
-O001: NEW
-→ O001: PARTIALLY_FILLED
-→ O001: FILLED
-```
 ### 12.2 Kline Update MERGE Check
 
 `staging_klines`를 `processed_klines`에 MERGE하기 전후로 snapshot을 확인한다.
@@ -797,6 +805,7 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - `processed_trades` 구현
 - `staging_klines` 구현
 - `processed_klines` 구현
+- `staging_orders` 구현
 - `processed_orders` 구현
 - kline update MERGE 구현
 - order status MERGE 구현
@@ -840,6 +849,8 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - Raw Zone에서 `processed_trades`, `staging_klines`, `processed_klines`, `processed_orders` Iceberg table을 생성할 수 있다.
 - Raw kline event를 `staging_klines`에 정제 적재할 수 있다.
 - `staging_klines`의 kline update를 key 단위 dedup 후 `processed_klines`에 `MERGE INTO`로 반영할 수 있다.
+- Raw order event를 `staging_orders`에 정제 적재할 수 있다.
+- `staging_orders`의 order status event를 `order_id` 기준 최신 상태로 dedup 후 `processed_orders`에 `MERGE INTO`로 반영할 수 있다.
 - Order status update를 `processed_orders`에 `MERGE INTO`로 반영할 수 있다.
 - MERGE 전후 snapshot을 확인할 수 있다.
 - `market_hourly_summary`와 `order_execution_summary`를 생성할 수 있다.

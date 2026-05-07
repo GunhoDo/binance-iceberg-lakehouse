@@ -12,7 +12,7 @@
 | Kafka | 이벤트별 topic으로 분리된 이벤트 스트림 보관 |
 | `streams/` | Kafka → Spark Structured Streaming → Raw Zone (append-only) |
 | Raw Zone | Kafka 원본 메타데이터 포함, 재처리 기준 |
-| Staging Tables | MERGE 입력을 안정화하기 위한 중간 테이블. Phase 2에서는 `staging_klines`를 사용한다. |
+| Staging Tables | MERGE 입력을 안정화하기 위한 중간 테이블. Phase 2에서는 `staging_klines`, `staging_orders`를 사용한다. |
 | `jobs/` / `pipelines/` | Raw → Staging → Processed → Serving Spark batch job |
 | Iceberg metadata | snapshot / files / partitions 등 운영 가시성 source |
 | `dags/` | Phase 3에서 Spark job을 orchestrate |
@@ -46,6 +46,8 @@ Kafka topic: orders
    ↓
 raw_orders
    ↓
+staging_orders
+   ↓
 processed_orders
 
 processed_trades + processed_klines + processed_orders
@@ -74,9 +76,9 @@ build_processed_klines        # raw_klines → staging_klines
    ↓
 merge_kline_updates           # staging_klines → processed_klines
    ↓
-build_processed_orders
+build_processed_orders        # raw_orders → staging_orders
    ↓
-merge_order_status_updates
+merge_order_status_updates    # staging_orders → processed_orders
    ↓
 build_serving_summaries
    ↓
@@ -96,7 +98,7 @@ check_after_compaction
 Pipeline DAG와 Maintenance DAG를 분리하는 이유는 데이터 처리 흐름과 Iceberg
 유지보수 작업의 실행 목적이 다르기 때문이다 (PRD §14.3).
 
-## 책임 경계 — 자주 헷갈릴 만한 두 가지
+## 책임 경계 — 자주 헷갈릴 만한 것들
 
 ### Kline upsert는 누구의 책임인가
 
@@ -105,18 +107,29 @@ Raw Zone은 append-only로만 받고, kline의 upsert-like 처리는 processed l
 
 ### staging_klines는 왜 필요한가
 
-`processed_klines`는 (symbol, interval, open_time) 기준으로 MERGE한다.
+`processed_klines`는 `(symbol, interval, open_time)` 기준으로 MERGE한다.
 하지만 MERGE source 안에 같은 key가 여러 번 존재하면 하나의 target row에 여러
 source row가 매칭될 수 있다.
 
-따라서 Phase 2에서는 raw_klines를 바로 processed_klines에 반영하지 않고,
-먼저 staging_klines에 정제 결과를 적재한다. 이후 `07_merge_kline_updates.sql`에서
-MERGE 직전에 key 단위 dedup을 수행한 뒤 processed_klines에 반영한다.
+따라서 Phase 2에서는 `raw_klines`를 바로 `processed_klines`에 반영하지 않고,
+먼저 `staging_klines`에 정제 결과를 적재한다. 이후 `07_merge_kline_updates.sql`에서
+MERGE 직전에 key 단위 dedup을 수행한 뒤 `processed_klines`에 반영한다.
 
 이 staging table은 영구 serving table이 아니라, MERGE source 안정화를 위한 중간 테이블이다.
+
+### staging_orders는 왜 필요한가
+
+`processed_orders`는 `order_id` 기준으로 주문의 최신 상태를 관리한다.
+하지만 raw order event에는 같은 `order_id`에 대해 `NEW`, `PARTIALLY_FILLED`,
+`FILLED`, `CANCELED` 같은 상태 이벤트가 여러 번 존재한다.
+
+따라서 Phase 2에서는 `raw_orders`를 먼저 `staging_orders`에 정제 적재하고,
+`08_merge_order_status_updates.sql`에서 `order_id` 기준 최신 이벤트를 선택한 뒤
+`processed_orders`에 MERGE한다.
+
+이 구조는 주문 이벤트 로그 보존과 주문 최신 상태 관리를 분리하기 위한 것이다.
 
 ### trades와 klines는 왜 processed에서 합치지 않는가
 
 `decisions.md` D4 참조. processed_market_events 단일 테이블로 합치면 sparse
 union schema가 silver에 그대로 옮겨지기 때문이다.
-
