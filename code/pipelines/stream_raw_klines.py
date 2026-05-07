@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pyspark.sql import functions as F
 
-from jobs.common.spark_session import get_spark_streaming
+from code.pipelines.common.spark_session import get_spark
 
 KAFKA_BOOTSTRAP = "localhost:9092"
 KAFKA_TOPIC = "klines"

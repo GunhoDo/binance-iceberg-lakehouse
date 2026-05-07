@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jobs.common.spark_session import get_spark
+from code.pipelines.common.spark_session import get_spark
 
 SQL_PATH = Path(__file__).resolve().parent.parent / "sql" / "07_merge_kline_updates.sql"
 

@@ -15,7 +15,7 @@ Write Pattern: MERGE, Incremental (PRD §9).
 
 from __future__ import annotations
 
-from jobs.common.spark_session import get_spark
+from code.pipelines.common.spark_session import get_spark
 
 
 def run() -> None:
