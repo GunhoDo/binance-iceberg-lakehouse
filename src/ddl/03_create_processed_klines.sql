@@ -10,7 +10,7 @@
 
 CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.processed_klines (
     symbol            STRING,
-    interval          STRING,
+    `interval`        STRING,
     open_time         TIMESTAMP,
     close_time        TIMESTAMP,
     open              DECIMAL(20, 8),

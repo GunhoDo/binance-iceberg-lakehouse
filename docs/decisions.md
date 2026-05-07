@@ -274,6 +274,13 @@ MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
 
 향후 실시간 WebSocket kline 수집 시에는 raw message에 `x` 또는 `is_closed` 필드를 포함하고, processed layer에서 이를 `BOOLEAN`으로 변환한다.
 
+### D14. Staging table 운영 방식
+
+Phase 2 MVP에서는 `staging_klines`를 MERGE source로 사용한다.  
+staging table은 append 방식으로 유지하고, MERGE 직전에 `(symbol, interval, open_time)` 기준으로 dedup한다.
+
+향후 Airflow 도입 시 `batch_id` 또는 `run_id`를 추가해 실행 단위별 staging 관리로 확장한다.
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
