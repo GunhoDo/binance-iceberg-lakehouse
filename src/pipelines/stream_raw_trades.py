@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pyspark.sql import functions as F
 
-from src.pipelines.common.spark_session import get_spark
+from src.pipelines.common.spark_session import get_spark_streaming
 
 KAFKA_BOOTSTRAP = "localhost:9092"
 KAFKA_TOPIC = "trades"
