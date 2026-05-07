@@ -9,7 +9,7 @@ PRD §10.1, §14.1 참조.
 실행:
     PYTHONPATH=. spark-submit \\
         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \\
-        streams/stream_raw_trades.py
+        src/pipelines/stream_raw_trades.py
 """
 
 from __future__ import annotations
