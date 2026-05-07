@@ -36,3 +36,4 @@ spark-warehouse/
 *.log
 logs/
 metastore_db/
+.ipynb_*
