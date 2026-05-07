@@ -256,6 +256,7 @@ Apache Iceberg를 사용한다.
 | Compaction 주기 | small file 발생률을 본 뒤 결정. | Phase 3 |  |  |
 | `expire_snapshots` 보존 기간 | 운영 정책에 따름. | Phase 3 |  |  |
 | PRD §13.5의 임계값 (`avg_file_size_mb < 64` 등) | PRD에 적힌 값은 **초기 시작 임계값**이며, 운영하며 조정한다. | Phase 3 후반 |  |  |
+| Table mode (`copy-on-write`, `merge-on-read`) | table별 update 특성에 따라 다르게 결정해야 한다. | Phase 2 | `processed_trades`: COW/Append<br>`processed_klines`: MOR<br>`processed_orders`: MOR<br>Serving tables: COW | kline/order는 MERGE 기반 update가 발생할 수 있으므로 확장성을 고려해 MOR로 설계한다. trades는 append-only이며, serving은 조회 중심이므로 COW가 적합하다. |
 
 ---
 
@@ -330,6 +331,30 @@ Phase 2에서는 `simulated_parameters`를 구조화된 Map/Struct로 강제 파
 이유는 `simulated_parameters` 내부에 숫자, 배열, 문자열이 함께 존재하므로 Iceberg/Athena 호환성을 고려하면 STRING 보존이 가장 단순하고 안전하기 때문이다.
 
 향후 simulator parameter 분석이 필요해지면 별도 schema를 정의해 struct column 또는 별도 config table로 분리한다.
+
+### D16. Processed table COW/MOR 선택 기준
+
+Phase 2에서는 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merge-on-Read)를 구분한다.
+
+| Table | Mode | 이유 |
+|---|---|---|
+| `processed_trades` | COW / Append | trade event는 append-only 성격이 강하고 기존 row update가 거의 없다. |
+| `processed_klines` | MOR | 실시간 kline stream에서는 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 반복 update될 수 있다. |
+| `processed_orders` | MOR | 같은 `order_id`에 대해 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다. |
+| Serving tables | COW | dashboard/BI 조회 중심이므로 read performance와 단순한 snapshot 비교가 중요하다. |
+
+`processed_klines`와 `processed_orders`는 향후 데이터 증가와 update 빈도 증가를 고려해 MOR로 설계한다. MOR는 write 비용을 줄일 수 있지만, delete file 누적과 read amplification을 관리해야 한다.
+
+따라서 Phase 3 maintenance에서는 다음 항목을 관찰하고 관리한다.
+
+- data file count
+- delete file count
+- delete/data file ratio
+- manifest count
+- snapshot count
+- `rewrite_data_files`
+- `rewrite_manifests`
+- snapshot expiration
 
 ---
 

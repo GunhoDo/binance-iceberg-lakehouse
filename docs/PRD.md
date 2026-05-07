@@ -19,6 +19,8 @@ Binance의 `trades`와 `klines`는 공개 시장 데이터로 수집하고, user
 - Airflow와 QuickSight를 통해 파이프라인과 데이터 상태를 운영 지표로 확인한다.
 - kline update는 `staging_klines`에서 key 단위 dedup 후 `processed_klines`에 MERGE한다.
 - order status event는 `staging_orders`에서 최신 상태를 선별한 뒤 `processed_orders`에 MERGE한다.
+- update가 발생할 수 있는 `processed_klines`, `processed_orders`는 확장성을 고려해 MOR(Merge-on-Read) 기반으로 설계한다.
+- MOR table에서 발생할 수 있는 delete file과 manifest 증가는 Iceberg metadata table로 관찰하고, maintenance 단계에서 rewrite/compaction 정책을 적용한다.
 
 ---
 
@@ -68,6 +70,8 @@ Binance는 공개 market data stream으로 trade, aggregate trade, kline/candles
 - 진행 중인 kline update를 `staging_klines`에 정제한 뒤, MERGE 직전 key 단위 dedup을 거쳐 `processed_klines`에 최신 상태로 반영한다.
 - 주문 상태 이벤트를 `staging_orders`에 정제한 뒤, `order_id` 기준 최신 상태를 `processed_orders`에 MERGE한다.
 - market/order 지표를 serving tables로 사전 집계한다.
+- update가 발생하는 `processed_klines`, `processed_orders`는 확장성을 고려해 MOR 기반 Iceberg table로 설계한다.
+- MOR table의 delete file, manifest, snapshot 상태를 Iceberg metadata table로 확인한다.
 - Iceberg snapshot과 files metadata를 조회한다.
 - Compaction 전후 파일 개수와 평균 파일 크기를 비교한다.
 
@@ -375,6 +379,10 @@ MERGE 기준:
 
 현재 Phase 2의 raw kline 데이터는 historical kline 형태이며 `is_closed` 또는 Binance WebSocket close flag `x`가 없다. 따라서 Phase 2에서는 모든 kline을 이미 종료된 캔들로 보고 `is_closed = true`로 적재한다. 향후 WebSocket 기반 실시간 kline 수집으로 확장할 경우 raw message에 `x` 또는 `is_closed` 필드를 포함하고, processed layer에서 이를 `BOOLEAN`으로 변환한다.
 
+`processed_klines`는 반복 update 가능성이 있는 table이므로 MOR(Merge-on-Read)로 설계한다. 이는 실시간 kline stream에서 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 여러 번 갱신될 수 있기 때문이다.
+
+MOR 적용 후에는 delete file 증가와 read amplification을 Iceberg metadata table로 관찰하고, maintenance 단계에서 compaction/rewrite 정책을 적용한다.
+
 주요 컬럼:
 
 - `symbol`
@@ -422,7 +430,9 @@ MERGE 기준:
 - 상태 우선순위: `NEW=1`, `PARTIALLY_FILLED=2`, `FILLED=3`, `CANCELED=3`
 - late event 방어: `source.updated_at >= target.updated_at`
 
-`processed_orders`는 order event log가 아니라 주문별 최신 상태 table이다. 따라서 최종적으로 `order_id`당 하나의 row만 유지한다.
+`processed_orders`는 주문별 최신 상태 table이며, 같은 `order_id`에 대해 상태 전이가 발생한다. 따라서 향후 주문 이벤트 규모와 상태 update 빈도 증가를 고려해 MOR(Merge-on-Read)로 설계한다.
+
+MOR 적용 후에는 delete file과 manifest 증가를 Iceberg metadata table로 관찰하고, maintenance 단계에서 rewrite/compaction 정책을 적용한다.
 
 주요 컬럼:
 
@@ -483,20 +493,28 @@ MERGE 기준:
 
 ## 11. Iceberg Table Mode
 
-본 MVP는 COW(Copy-on-Write)를 기본으로 한다. 이유는 구현 단순성, 읽기 성능, snapshot 비교의 명확성이다.
+본 MVP는 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merge-on-Read)를 구분해 사용한다.
+
+- append-only 성격이 강한 table은 COW 또는 append 중심으로 유지한다.
+- row-level update / MERGE 빈도가 증가할 수 있는 table은 MOR를 사용한다.
+- dashboard 조회 중심의 serving table은 COW를 유지한다.
 
 | Table | Mode | Reason |
 |---|---|---|
-| `processed_trades` | COW | append 중심이며 읽기/검증이 중요하다. |
-| `processed_klines` | COW | kline update MERGE를 실험하되, MVP에서는 데이터 규모가 작고 snapshot 비교가 중요하다. |
-| `processed_orders` | COW | 주문 상태 MERGE를 실험하되, MVP에서는 데이터 규모가 작고 snapshot 비교가 중요하다. |
-| `market_hourly_summary` | COW | QuickSight 조회 중심의 read-heavy table이다. |
-| `order_execution_summary` | COW | QuickSight 조회 중심의 read-heavy table이다. |
+| `processed_trades` | COW / Append | 체결 단위 append-only event이며 기존 row update가 거의 없다. MOR의 이점이 낮고, 읽기와 검증이 중요하다. |
+| `staging_klines` | Append only | raw kline을 정제한 MERGE source table이다. 최신 상태 관리는 `processed_klines`에서 수행한다. |
+| `processed_klines` | MOR | 실시간 kline stream에서는 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 반복 update될 수 있다. 향후 데이터 증가와 update 빈도 증가를 고려해 MOR로 설계한다. |
+| `staging_orders` | Append only | raw order event를 정제한 MERGE source table이다. 주문 최신 상태 관리는 `processed_orders`에서 수행한다. |
+| `processed_orders` | MOR | `order_id` 기준으로 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다. 상태 update 빈도가 증가할 수 있으므로 MOR로 설계한다. |
+| `market_hourly_summary` | COW | QuickSight 조회 중심의 read-heavy serving table이다. |
+| `order_execution_summary` | COW | QuickSight 조회 중심의 read-heavy serving table이다. |
 | `data_quality_summary` | Append only | 실행별 품질 지표를 누적한다. |
 | `pipeline_run_summary` | Append only | 실행별 파이프라인 결과를 누적한다. |
 | `table_health_summary` | Append only | Iceberg table health 지표를 시간순으로 누적한다. |
 
-확장 단계에서 kline update 또는 order status update 빈도가 높아져 row-level update 비용이 커지면 `processed_klines` 또는 `processed_orders`에 MOR(Merge-on-Read) 적용을 검토한다. 다만 summary/serving table은 대시보드 조회가 많으므로 COW를 우선 유지한다.
+`processed_klines`와 `processed_orders`는 MOR를 사용하므로 delete file과 manifest 증가를 관찰해야 한다. Phase 3 Maintenance 단계에서는 `rewrite_data_files`, `rewrite_manifests`, snapshot expiration 등 Iceberg maintenance 작업을 통해 MOR table의 read amplification과 metadata 증가를 관리한다.
+
+Serving table은 dashboard와 BI 조회가 중심이므로 MOR가 아니라 COW를 유지한다.
 
 ---
 
@@ -562,6 +580,29 @@ Streaming write로 작은 파일이 여러 개 생성된 상태에서 compaction
 | Snapshot count | TBD | TBD |
 | Query time | TBD | TBD |
 
+### 12.5 MOR Delete File Check
+
+`processed_klines`와 `processed_orders`는 MOR table이므로 MERGE 이후 Iceberg metadata table에서 data file과 delete file 분포를 확인한다.
+
+확인 대상:
+
+- `files.content` 분포
+- data file count
+- delete file count
+- average file size
+- manifest count
+- snapshot 변화
+
+예시:
+
+```sql
+SELECT content, COUNT(*) AS file_count
+FROM glue.binance_lakehouse.processed_orders.files
+GROUP BY content;
+```
+
+MOR table은 write 비용을 줄이는 대신 read amplification과 delete file 누적이 발생할 수 있으므로, Phase 3 maintenance에서 `rewrite_data_files`, `rewrite_manifests`, snapshot expiration을 검증한다.
+
 ---
 
 ## 13. Observability Plan
@@ -621,6 +662,10 @@ Streaming write로 작은 파일이 여러 개 생성된 상태에서 compaction
 - last commit time
 - last compaction time
 - compaction needed flag
+- data file count
+- delete file count
+- delete/data file ratio
+- manifest count
 
 ### 13.5 Monitoring Thresholds
 
@@ -637,6 +682,9 @@ Streaming write로 작은 파일이 여러 개 생성된 상태에서 compaction
 | `small_file_count` | `> 10` |
 | `snapshot_count` | `> 20` |
 | `last_successful_run_hours` | `> 24` |
+| `delete_file_count` | `> 10` |
+| `delete_to_data_file_ratio` | `> 0.5` |
+| `manifest_count` | `> 20` |
 
 ---
 
@@ -763,6 +811,10 @@ local Kafka
 - batch size
 - Iceberg target file size
 - compaction 주기
+- MOR table의 delete file 증가율
+- read amplification
+- rewrite_data_files 주기
+- rewrite_manifests 주기
 
 ### 16.3 Scale-out
 
@@ -812,6 +864,10 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - `market_hourly_summary` 구현
 - `order_execution_summary` 구현
 - Snapshot 및 metadata table 확인
+- `processed_klines`, `processed_orders` MOR table mode 적용
+- MOR table의 data/delete file 분포 확인
+- MOR table maintenance 정책 검증
+- delete file rewrite / data file compaction / manifest rewrite 실험
 - Compaction 전후 비교
 
 ### Phase 3. Observability + Airflow

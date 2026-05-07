@@ -18,6 +18,17 @@
 | `dags/` | Phase 3에서 Spark job을 orchestrate |
 | QuickSight | Phase 4에서 serving / observability table 시각화 |
 
+### processed table의 COW/MOR 선택 기준
+
+Processed layer는 table의 update 특성에 따라 COW와 MOR를 구분한다.
+
+- `processed_trades`: append 중심이므로 COW/Append로 유지한다.
+- `processed_klines`: 같은 `(symbol, interval, open_time)` 키가 반복 update될 수 있으므로 MOR로 설계한다.
+- `processed_orders`: 같은 `order_id`에 대해 상태 전이가 발생하므로 MOR로 설계한다.
+- Serving tables: dashboard 조회 중심이므로 COW를 유지한다.
+
+MOR table은 delete file과 manifest 증가를 동반할 수 있으므로, Iceberg metadata table을 통해 상태를 관찰하고 Phase 3 maintenance에서 compaction/rewrite 작업을 수행한다.
+
 ## MVP 흐름
 
 ```text
