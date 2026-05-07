@@ -154,19 +154,24 @@ MVP의 모든 processed/serving table은 COW (Copy-on-Write) 로 시작한다.
 
 다음 두 케이스에서 `MERGE INTO`를 사용한다.
 
-- `processed_klines`: 같은 `(symbol, interval, open_time)` 키에 대해 interval이
-  닫히기 전까지 반복 update가 도착한다.
-- `processed_orders`: 같은 `order_id`에 대해 `NEW → PARTIALLY_FILLED → FILLED`
-  또는 `NEW → CANCELED` 상태 전이가 발생한다.
+- `processed_klines`: 같은 `(symbol, interval, open_time)` 키에 대해 interval이 닫히기 전까지 반복 update가 도착할 수 있다.
+- `processed_orders`: 같은 `order_id`에 대해 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다.
 
-### 보류 / 미정
+### MERGE 입력 dedup 전략
 
-- MERGE 입력 micro-batch 안에서 같은 키가 여러 번 나타날 수 있다 (kline은 거의
-  확실, order는 가능). 따라서 MERGE 직전에 키 단위 dedup이 필요하다.
-  현재 SQL은 placeholder로 두고, 실제 dedup 전략(window function 기준 컬럼)은
-  Phase 2에서 결정한다.
-- late event 방어 조건 (`source.updated_at >= target.updated_at` 같은 단조성
-  체크)은 Phase 2에서 실데이터를 보면서 추가한다.
+`MERGE INTO`의 source 안에 같은 target key가 여러 번 존재하면 하나의 target row에 여러 source row가 매칭될 수 있다. 따라서 MERGE 직전에 key 단위 dedup을 수행한다.
+
+- `processed_klines`: `(symbol, interval, open_time)` 기준으로 dedup
+- 정렬 기준: `source_offset DESC`
+- 선택 row: 가장 최신 Kafka offset row
+
+현재 Phase 2에서는 raw kline이 historical kline 형태이므로 `is_closed = true`로 처리한다. 향후 실시간 WebSocket kline으로 확장하면 `is_closed` 또는 Binance close flag `x`를 함께 사용해 최종 캔들 여부를 판단한다.
+
+### Late event 처리
+
+Phase 2에서는 우선 `source_offset >= target.source_offset` 조건으로 오래된 source row가 최신 target row를 덮어쓰지 않도록 한다.
+
+향후 multi-partition 또는 event-time 기반 late event 처리가 필요해지면 `updated_at`, `open_time`, `is_closed`를 함께 고려한 조건으로 확장한다.
 
 ---
 
@@ -215,14 +220,14 @@ Apache Iceberg를 사용한다.
 다음 항목은 현재 PRD와 코드에 구체값을 적지 않는다. 임의로 적으면 "고민 없이
 LLM이 적은 값"이 되므로, 데이터를 보고 결정한다.
 
-| 항목 | 보류 이유 | 결정 시점 |
-|---|---|---|
-| Partition spec (`days(...)`, `bucket(...)` 등) | 실제 쿼리 패턴과 데이터 분포를 보고 결정해야 의미가 있다. | Phase 2 후반 |
-| `write.target-file-size-bytes` | streaming trigger interval과 함께 결정. | Phase 2 |
-| Streaming trigger interval | 데이터 유입량을 보고 결정. | Phase 1 후반 |
-| Compaction 주기 | small file 발생률을 본 뒤 결정. | Phase 3 |
-| `expire_snapshots` 보존 기간 | 운영 정책에 따름. | Phase 3 |
-| PRD §13.5의 임계값 (avg_file_size_mb < 64 등) | PRD에 적힌 값은 **초기 시작 임계값**이며, 운영하며 조정한다. | Phase 3 후반 |
+| 항목 | 보류 이유 | 결정 시점 | 결정 내용 | 결정 이유 |
+|---|---|---|---|---|
+| Partition spec (`days(...)`, `bucket(...)` 등) | 실제 쿼리 패턴과 데이터 분포를 보고 결정해야 의미가 있다. | Phase 2 후반 | `processed_trades`: `days(trade_time)`<br>`processed_klines`: `days(open_time)` | Raw는 ingest time 기준으로 보관하지만, Processed layer는 이벤트 시간 기준 조회/집계가 중심이므로 trade/kline event time 기준으로 파티셔닝한다. |
+| `write.target-file-size-bytes` | streaming trigger interval과 함께 결정. | Phase 2 |  |  |
+| Streaming trigger interval | 데이터 유입량을 보고 결정. | Phase 1 후반 | `30 seconds` | Phase 1에서는 빠른 수집 검증이 우선이므로 짧은 trigger interval을 사용했다. small file 발생 여부는 이후 S3 파일 크기와 compaction 실험에서 확인한다. |
+| Compaction 주기 | small file 발생률을 본 뒤 결정. | Phase 3 |  |  |
+| `expire_snapshots` 보존 기간 | 운영 정책에 따름. | Phase 3 |  |  |
+| PRD §13.5의 임계값 (`avg_file_size_mb < 64` 등) | PRD에 적힌 값은 **초기 시작 임계값**이며, 운영하며 조정한다. | Phase 3 후반 |  |  |
 
 ---
 
@@ -260,6 +265,14 @@ trades와, klines는 한달치만 사용한다. 한달치만으로도 파이프�
 trades는 체결 확정 이벤트라 한 번 발생하면 수정되지 않는다.
 따라서 trade_id 기준 중복 제거 후 append만 하면 충분하다.
 MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
+
+## D13. Kline `is_closed` 처리
+
+현재 `raw_klines`는 historical kline 기반이며, `message_value`에 WebSocket close flag(`x`)가 없다.
+
+따라서 Phase 2에서는 모든 kline을 이미 종료된 캔들로 보고 `processed_klines.is_closed = true`로 적재한다.
+
+향후 실시간 WebSocket kline 수집 시에는 raw message에 `x` 또는 `is_closed` 필드를 포함하고, processed layer에서 이를 `BOOLEAN`으로 변환한다.
 
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
