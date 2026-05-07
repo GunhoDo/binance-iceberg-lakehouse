@@ -12,8 +12,8 @@ PRD §10.3 참조.
 
 실행:
     PYTHONPATH=. spark-submit \
-        --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.0,org.apache.iceberg:iceberg-aws-bundle:1.7.0 \
-        code/pipelines/build_processed_trades.py
+        --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.0,org.apache.iceberg:iceberg-aws-bundle:1.7.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+        src/pipelines/build_processed_trades.py
 """
 
 from __future__ import annotations
