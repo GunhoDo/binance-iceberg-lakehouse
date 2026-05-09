@@ -1,58 +1,106 @@
-"""lakehouse_daily_pipeline.py
+"""daily_lakehouse_pipeline.py
 
-Daily pipeline DAG. PRD §14.2 의 task 흐름을 따른다.
+Phase3 Airflow DAG.
 
-build_processed_trades
-   ↓
-build_processed_klines
-   ↓
-build_processed_orders
-   ↓
-merge_order_status_updates
-   ↓
-build_market_hourly_summary
-   ↓
-build_order_execution_summary
-   ↓
-check_data_quality
-   ↓
-check_table_health
-
-설계 노트:
-- 본 스켈레톤은 task 이름과 의존성만 정의한다.
-- Operator 종류 (BashOperator vs SparkSubmitOperator vs KubernetesPodOperator) 는
-  Phase 3 진입 시 환경에 맞게 결정한다 (`docs/decisions.md` D9).
-- merge_kline_updates 는 build_processed_klines 의 staging 흐름과 합쳐 일단
-  build_processed_klines 다음에 두지 않는다. PRD §14.2 흐름을 그대로 따른다.
-  실제 task 분할은 Phase 3 구현 시 다시 본다.
+역할:
+- DAG는 orchestration만 담당한다.
+- 실제 Spark 처리 로직은 src/jobs/daily/*.py에 둔다.
+- 각 task는 orchestration/scripts/run_job.sh를 통해 실행한다.
 """
 
 from __future__ import annotations
 
-# from datetime import datetime
-# from airflow import DAG
-# Phase 3에서 활성화
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
 
 
-TASK_ORDER = [
-    "build_processed_trades",
-    "build_processed_klines",
-    "build_processed_orders",
-    "merge_order_status_updates",
-    "build_market_hourly_summary",
-    "build_order_execution_summary",
-    "check_data_quality",
-    "check_table_health",
-]
+PROJECT_ROOT = "/opt/airflow/project"
+
+DEFAULT_ARGS = {
+    "owner": "lakehouse",
+    "depends_on_past": False,
+    "retries": 1,
+    "retry_delay": timedelta(minutes=5),
+}
 
 
-def build_dag():
-    """DAG 객체를 생성한다.
+def spark_job_task(task_id: str, job_path: str) -> BashOperator:
+    return BashOperator(
+        task_id=task_id,
+        bash_command=f"""
+        cd {PROJECT_ROOT} && \
+        ./orchestration/scripts/run_job.sh \
+          {job_path} \
+          "{{{{ data_interval_start }}}}" \
+          "{{{{ data_interval_end }}}}" \
+          "{{{{ run_id }}}}"
+        """,
+    )
 
-    schedule, start_date, default_args, retries 정책은 Phase 3에서 결정한다.
-    PRD에 명시된 값이 없으므로 임의로 적지 않는다.
-    """
-    raise NotImplementedError("Phase 3: Airflow 환경 결정 후 구현")
 
+with DAG(
+    dag_id="daily_lakehouse_pipeline",
+    default_args=DEFAULT_ARGS,
+    description="Phase3 window-based idempotent lakehouse daily pipeline",
+    start_date=datetime(2026, 5, 6),
+    schedule="@daily",
+    catchup=False,
+    max_active_runs=1,
+    tags=["lakehouse", "iceberg", "phase3"],
+) as dag:
 
-# dag = build_dag()
+    build_processed_trades = spark_job_task(
+        task_id="build_processed_trades",
+        job_path="src/jobs/daily/01_build_processed_trades_window.py",
+    )
+
+    build_staging_klines = spark_job_task(
+        task_id="build_staging_klines",
+        job_path="src/jobs/daily/02_build_staging_klines_window.py",
+    )
+
+    merge_processed_klines = spark_job_task(
+        task_id="merge_processed_klines",
+        job_path="src/jobs/daily/03_merge_processed_klines_window.py",
+    )
+
+    build_staging_orders = spark_job_task(
+        task_id="build_staging_orders",
+        job_path="src/jobs/daily/04_build_staging_orders_window.py",
+    )
+
+    merge_processed_orders = spark_job_task(
+        task_id="merge_processed_orders",
+        job_path="src/jobs/daily/05_merge_processed_orders_window.py",
+    )
+
+    build_market_hourly_summary = spark_job_task(
+        task_id="build_market_hourly_summary",
+        job_path="src/jobs/daily/06_build_market_hourly_summary_window.py",
+    )
+
+    build_order_execution_summary = spark_job_task(
+        task_id="build_order_execution_summary",
+        job_path="src/jobs/daily/07_build_order_execution_summary_window.py",
+    )
+
+    check_data_quality = spark_job_task(
+        task_id="check_data_quality",
+        job_path="src/jobs/daily/08_check_data_quality.py",
+    )
+
+    check_table_health = spark_job_task(
+        task_id="check_table_health",
+        job_path="src/jobs/daily/09_check_table_health.py",
+    )
+
+    build_processed_trades >> build_market_hourly_summary
+
+    build_staging_klines >> merge_processed_klines >> build_market_hourly_summary
+
+    build_staging_orders >> merge_processed_orders >> build_order_execution_summary
+
+    [build_market_hourly_summary, build_order_execution_summary] >> check_data_quality
+    check_data_quality >> check_table_health
