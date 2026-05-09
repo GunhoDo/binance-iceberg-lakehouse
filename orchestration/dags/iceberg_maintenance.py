@@ -1,37 +1,73 @@
 """iceberg_maintenance.py
 
-Iceberg Maintenance DAG. PRD §14.3 의 task 흐름을 따른다.
+Iceberg maintenance DAG.
 
-check_small_files
-   ↓
-compact_processed_tables
-   ↓
-compact_serving_tables
-   ↓
-check_after_compaction
-
-설계 노트:
-- Pipeline DAG와 분리한다. 데이터 처리 흐름과 Iceberg 유지보수 작업의 실행 목적이
-  다르기 때문이다 (PRD §14.3).
-- DAG schedule, retry 정책은 Phase 3에서 결정.
+Flow:
+1. table health before maintenance
+2. Iceberg maintenance procedures
+3. table health after maintenance
 """
 
 from __future__ import annotations
 
-# from airflow import DAG
-# Phase 3에서 활성화
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
 
 
-TASK_ORDER = [
-    "check_small_files",
-    "compact_processed_tables",
-    "compact_serving_tables",
-    "check_after_compaction",
-]
+SPARK_CONTAINER = "spark-runner"
+PROJECT_ROOT = "/workspace"
+
+DEFAULT_ARGS = {
+    "owner": "lakehouse",
+    "depends_on_past": False,
+    "retries": 0,
+    "retry_delay": timedelta(minutes=5),
+}
 
 
-def build_dag():
-    raise NotImplementedError("Phase 3: Airflow 환경 결정 후 구현")
+def run_job_task(task_id: str, job_path: str, run_id_suffix: str = "") -> BashOperator:
+    return BashOperator(
+        task_id=task_id,
+        bash_command=f"""
+        docker exec {SPARK_CONTAINER} \
+          {PROJECT_ROOT}/orchestration/scripts/run_job_with_log.sh \
+          {task_id} \
+          {job_path} \
+          "{{{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
+          "{{{{ data_interval_end.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
+          "{{{{ run_id }}}}{run_id_suffix}"
+        """,
+    )
 
 
-# dag = build_dag()
+with DAG(
+    dag_id="iceberg_maintenance",
+    default_args=DEFAULT_ARGS,
+    description="Iceberg maintenance DAG for compaction, delete rewrite, manifests, snapshots",
+    start_date=datetime(2026, 5, 6),
+    schedule="@weekly",
+    catchup=False,
+    max_active_runs=1,
+    tags=["lakehouse", "iceberg", "maintenance"],
+) as dag:
+
+    check_table_health_before = run_job_task(
+        task_id="check_table_health_before",
+        job_path="src/jobs/daily/09_check_table_health.py",
+        run_id_suffix="__before",
+    )
+
+    run_iceberg_maintenance = run_job_task(
+        task_id="run_iceberg_maintenance",
+        job_path="src/jobs/maintenance/run_iceberg_maintenance.py",
+    )
+
+    check_table_health_after = run_job_task(
+        task_id="check_table_health_after",
+        job_path="src/jobs/daily/09_check_table_health.py",
+        run_id_suffix="__after",
+    )
+
+    check_table_health_before >> run_iceberg_maintenance >> check_table_health_after

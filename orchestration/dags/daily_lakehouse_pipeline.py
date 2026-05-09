@@ -1,11 +1,9 @@
 """daily_lakehouse_pipeline.py
 
-Phase3 Airflow DAG.
+Phase 3 Airflow DAG.
 
-역할:
-- DAG는 orchestration만 담당한다.
-- 실제 Spark 처리 로직은 src/jobs/daily/*.py에 둔다.
-- 각 task는 orchestration/scripts/run_job.sh를 통해 실행한다.
+Airflow is orchestration only.
+Actual Spark jobs run inside spark-runner container.
 """
 
 from __future__ import annotations
@@ -16,7 +14,8 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 
 
-PROJECT_ROOT = "/opt/airflow/project"
+SPARK_CONTAINER = "spark-runner"
+PROJECT_ROOT = "/workspace"
 
 DEFAULT_ARGS = {
     "owner": "lakehouse",
@@ -30,11 +29,12 @@ def spark_job_task(task_id: str, job_path: str) -> BashOperator:
     return BashOperator(
         task_id=task_id,
         bash_command=f"""
-        cd {PROJECT_ROOT} && \
-        ./orchestration/scripts/run_job.sh \
+        docker exec {SPARK_CONTAINER} \
+          {PROJECT_ROOT}/orchestration/scripts/run_job_with_log.sh \
+          {task_id} \
           {job_path} \
-          "{{{{ data_interval_start }}}}" \
-          "{{{{ data_interval_end }}}}" \
+          "{{{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
+          "{{{{ data_interval_end.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
           "{{{{ run_id }}}}"
         """,
     )
@@ -43,7 +43,7 @@ def spark_job_task(task_id: str, job_path: str) -> BashOperator:
 with DAG(
     dag_id="daily_lakehouse_pipeline",
     default_args=DEFAULT_ARGS,
-    description="Phase3 window-based idempotent lakehouse daily pipeline",
+    description="Window-based idempotent daily lakehouse pipeline",
     start_date=datetime(2026, 5, 6),
     schedule="@daily",
     catchup=False,
@@ -52,48 +52,48 @@ with DAG(
 ) as dag:
 
     build_processed_trades = spark_job_task(
-        task_id="build_processed_trades",
-        job_path="src/jobs/daily/01_build_processed_trades_window.py",
+        "build_processed_trades",
+        "src/jobs/daily/01_build_processed_trades_window.py",
     )
 
     build_staging_klines = spark_job_task(
-        task_id="build_staging_klines",
-        job_path="src/jobs/daily/02_build_staging_klines_window.py",
+        "build_staging_klines",
+        "src/jobs/daily/02_build_staging_klines_window.py",
     )
 
     merge_processed_klines = spark_job_task(
-        task_id="merge_processed_klines",
-        job_path="src/jobs/daily/03_merge_processed_klines_window.py",
+        "merge_processed_klines",
+        "src/jobs/daily/03_merge_processed_klines_window.py",
     )
 
     build_staging_orders = spark_job_task(
-        task_id="build_staging_orders",
-        job_path="src/jobs/daily/04_build_staging_orders_window.py",
+        "build_staging_orders",
+        "src/jobs/daily/04_build_staging_orders_window.py",
     )
 
     merge_processed_orders = spark_job_task(
-        task_id="merge_processed_orders",
-        job_path="src/jobs/daily/05_merge_processed_orders_window.py",
+        "merge_processed_orders",
+        "src/jobs/daily/05_merge_processed_orders_window.py",
     )
 
     build_market_hourly_summary = spark_job_task(
-        task_id="build_market_hourly_summary",
-        job_path="src/jobs/daily/06_build_market_hourly_summary_window.py",
+        "build_market_hourly_summary",
+        "src/jobs/daily/06_build_market_hourly_summary_window.py",
     )
 
     build_order_execution_summary = spark_job_task(
-        task_id="build_order_execution_summary",
-        job_path="src/jobs/daily/07_build_order_execution_summary_window.py",
+        "build_order_execution_summary",
+        "src/jobs/daily/07_build_order_execution_summary_window.py",
     )
 
     check_data_quality = spark_job_task(
-        task_id="check_data_quality",
-        job_path="src/jobs/daily/08_check_data_quality.py",
+        "check_data_quality",
+        "src/jobs/daily/08_check_data_quality.py",
     )
 
     check_table_health = spark_job_task(
-        task_id="check_table_health",
-        job_path="src/jobs/daily/09_check_table_health.py",
+        "check_table_health",
+        "src/jobs/daily/09_check_table_health.py",
     )
 
     build_processed_trades >> build_market_hourly_summary
