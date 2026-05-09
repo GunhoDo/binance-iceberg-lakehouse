@@ -395,6 +395,41 @@ Phase 3 daily job의 공통 실행 인자는 다음과 같다.
 
 Airflow DAG는 Spark 처리 로직을 직접 포함하지 않고, task dependency, schedule, retry, logging만 담당한다. 실제 Spark 처리 로직은 `src/jobs/daily/`에 유지한다.
 
+## D18. Observability table은 append-only log로 유지한다
+
+Phase 3에서는 다음 observability table을 추가한다.
+
+- `data_quality_summary`
+- `pipeline_run_summary`
+- `table_health_summary`
+
+이 table들은 최신 상태 하나만 유지하는 current-state table이 아니라, 실행별/시점별 관측 결과를 누적하는 log table이다.
+
+따라서 update 또는 merge가 아니라 append-only 방식으로 운영한다.
+
+| Table | Write pattern | Reason |
+|---|---|---|
+| `data_quality_summary` | Append only | 각 run의 품질 검사 결과를 누적한다. |
+| `pipeline_run_summary` | Append only | Airflow DAG/task 실행 이력을 누적한다. |
+| `table_health_summary` | Append only | Iceberg metadata 기반 table health snapshot을 시간순으로 누적한다. |
+
+`data_quality_summary`는 row count, null count, duplicate count, check status를 저장한다.
+
+`table_health_summary`는 Iceberg metadata table인 `files`, `manifests`, `snapshots`를 기반으로 다음 지표를 저장한다.
+
+- data file count
+- position delete file count
+- equality delete file count
+- delete/data file ratio
+- average file size
+- total size
+- record count
+- manifest count
+- snapshot count
+- last committed timestamp
+
+향후 최신 상태만 빠르게 조회해야 한다면 `current_table_health` 같은 별도 current-state table을 만들 수 있다. 이 경우 current-state table은 MERGE 기반으로 관리한다.
+
 ---
 
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)

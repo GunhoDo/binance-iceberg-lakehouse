@@ -365,6 +365,8 @@ binance-iceberg-lakehouse/
 │   │   │   ├── 05_merge_processed_orders_window.py
 │   │   │   ├── 06_build_market_hourly_summary_window.py
 │   │   │   └── 07_build_order_execution_summary_window.py
+│   │   |   ├── 08_check_data_quality.py
+│   │   |   └── 09_check_table_health.py
 │   │   │
 │   │   └── maintenance/
 │   │       └── .gitkeep
