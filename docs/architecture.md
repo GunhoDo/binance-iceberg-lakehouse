@@ -123,7 +123,7 @@ Raw Zone은 append-only로만 받고, kline의 upsert-like 처리는 processed l
 source row가 매칭될 수 있다.
 
 따라서 Phase 2에서는 `raw_klines`를 바로 `processed_klines`에 반영하지 않고,
-먼저 `staging_klines`에 정제 결과를 적재한다. 이후 `07_merge_kline_updates.sql`에서
+먼저 `staging_klines`에 정제 결과를 적재한다. 이후 `03_merge_kline_updates.sql`에서
 MERGE 직전에 key 단위 dedup을 수행한 뒤 `processed_klines`에 반영한다.
 
 이 staging table은 영구 serving table이 아니라, MERGE source 안정화를 위한 중간 테이블이다.
@@ -144,3 +144,20 @@ MERGE 직전에 key 단위 dedup을 수행한 뒤 `processed_klines`에 반영�
 
 `decisions.md` D4 참조. processed_market_events 단일 테이블로 합치면 sparse
 union schema가 silver에 그대로 옮겨지기 때문이다.
+
+
+### Observability table은 왜 append-only인가
+
+Observability table은 current-state table이 아니라 이력 로그 table이다.
+
+예를 들어 `table_health_summary`는 특정 table의 최신 health 상태 하나만 유지하는 것이 아니라, `checked_at` 시점별 file count, average file size, snapshot count 등을 누적한다.
+
+```text
+checked_at=10:00, table=processed_orders, file_count=31
+checked_at=11:00, table=processed_orders, file_count=29
+checked_at=12:00, table=processed_orders, file_count=20
+```
+
+이 구조에서는 기존 row를 갱신하지 않고 새 관측값을 append한다. 따라서 append-only가 적합하다.
+
+향후 최신 상태만 조회하는 dashboard가 필요하면 `current_table_health` 같은 별도 current-state table을 만들고 MOR를 적용한다.

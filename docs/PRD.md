@@ -487,7 +487,7 @@ MOR 적용 후에는 delete file과 manifest 증가를 Iceberg metadata table로
 - average fill delay
 - average slippage proxy
 
-대시보드가 매번 processed table 전체를 집계하지 않도록 serving table로 사전 계산한다.
+Serving table은 BI 조회 성능과 비용을 줄이기 위한 사전 집계 계층이다. 대시보드는 `processed_*` 상세 테이블을 매번 스캔하지 않고, 미리 계산된 `market_hourly_summary`, `order_execution_summary`를 조회한다.
 
 ---
 
@@ -497,24 +497,28 @@ MOR 적용 후에는 delete file과 manifest 증가를 Iceberg metadata table로
 
 - append-only 성격이 강한 table은 COW 또는 append 중심으로 유지한다.
 - row-level update / MERGE 빈도가 증가할 수 있는 table은 MOR를 사용한다.
-- dashboard 조회 중심의 serving table은 COW를 유지한다.
+- dashboard 조회 중심의 serving table은 데이터가 늘어나는 상황을 가정하여 MOR를 사용한다.
 
-| Table | Mode | Reason |
-|---|---|---|
-| `processed_trades` | COW / Append | 체결 단위 append-only event이며 기존 row update가 거의 없다. MOR의 이점이 낮고, 읽기와 검증이 중요하다. |
-| `staging_klines` | Append only | raw kline을 정제한 MERGE source table이다. 최신 상태 관리는 `processed_klines`에서 수행한다. |
-| `processed_klines` | MOR | 실시간 kline stream에서는 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 반복 update될 수 있다. 향후 데이터 증가와 update 빈도 증가를 고려해 MOR로 설계한다. |
-| `staging_orders` | Append only | raw order event를 정제한 MERGE source table이다. 주문 최신 상태 관리는 `processed_orders`에서 수행한다. |
-| `processed_orders` | MOR | `order_id` 기준으로 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다. 상태 update 빈도가 증가할 수 있으므로 MOR로 설계한다. |
-| `market_hourly_summary` | COW | QuickSight 조회 중심의 read-heavy serving table이다. |
-| `order_execution_summary` | COW | QuickSight 조회 중심의 read-heavy serving table이다. |
-| `data_quality_summary` | Append only | 실행별 품질 지표를 누적한다. |
-| `pipeline_run_summary` | Append only | 실행별 파이프라인 결과를 누적한다. |
-| `table_health_summary` | Append only | Iceberg table health 지표를 시간순으로 누적한다. |
+| Layer | Table | Mode | Reason |
+|---|---|---|---|
+| Raw | `raw_trades`, `raw_klines`, `raw_orders` | Plain Parquet append-only | Kafka 원본 이벤트를 재처리 기준으로 보존한다. |
+| Staging | `staging_klines`, `staging_orders` | Iceberg append-only | Raw JSON을 파싱한 정제 이벤트 로그이며, MERGE source로 사용한다. |
+| Processed | `processed_trades` | COW / Append | 체결 이벤트는 append-only 성격이 강하고 기존 row update가 거의 없다. |
+| Processed | `processed_klines` | MOR | 실시간 kline stream에서는 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 반복 update될 수 있다. |
+| Processed | `processed_orders` | MOR | 같은 `order_id`에 대해 주문 상태 전이가 발생한다. |
+| Serving | `market_hourly_summary` | MOR | 같은 `(symbol, summary_hour)` 집계 row가 late event, 재처리, incremental window 갱신으로 반복 MERGE될 수 있다. |
+| Serving | `order_execution_summary` | MOR | 같은 `(symbol, summary_hour)` 주문 KPI row가 late order event, 재처리, incremental aggregation으로 반복 MERGE될 수 있다. |
+| Observability | `data_quality_summary` | Append only | 실행별 품질 지표를 새 row로 누적한다. 기존 row를 최신 상태로 갱신하지 않는다. |
+| Observability | `pipeline_run_summary` | Append only | 파이프라인 실행 이력을 시간순으로 누적한다. |
+| Observability | `table_health_summary` | Append only | table health 관측값을 시간순 snapshot으로 누적한다. |
 
 `processed_klines`와 `processed_orders`는 MOR를 사용하므로 delete file과 manifest 증가를 관찰해야 한다. Phase 3 Maintenance 단계에서는 `rewrite_data_files`, `rewrite_manifests`, snapshot expiration 등 Iceberg maintenance 작업을 통해 MOR table의 read amplification과 metadata 증가를 관리한다.
 
-Serving table은 dashboard와 BI 조회가 중심이므로 MOR가 아니라 COW를 유지한다.
+Serving table은 dashboard 조회 대상이지만, 본 프로젝트의 `market_hourly_summary`와 `order_execution_summary`는 immutable feature table이 아니다. 두 table은 같은 `(symbol, summary_hour)` key에 대해 late event, 재처리, Airflow execution window 기반 incremental aggregation으로 값이 반복 갱신될 수 있다. 따라서 장기적인 데이터 증가와 update 비용을 고려해 MOR로 설계한다.
+
+Observability table은 누적형 로그 테이블이다. 각 pipeline run 또는 health check마다 새 row를 추가하며, 같은 key의 최신 상태를 유지하기 위해 기존 row를 반복 update하지 않는다. 따라서 append-only가 기본이다.
+
+향후 최신 상태 조회가 필요해지면 `current_table_health`, `current_pipeline_status` 같은 별도 current-state table을 만들고, 해당 table에 MOR를 적용한다.
 
 ---
 
