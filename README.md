@@ -351,6 +351,24 @@ binance-iceberg-lakehouse/
 │   └── csv_to_kafka.py
 │
 ├── src/
+│   ├── jobs/
+│   │   ├── common/
+│   │   │   ├── args.py
+│   │   │   ├── spark_session.py
+│   │   │   └── tables.py
+│   │   │
+│   │   ├── daily/
+│   │   │   ├── 01_build_processed_trades_window.py
+│   │   │   ├── 02_build_staging_klines_window.py
+│   │   │   ├── 03_merge_processed_klines_window.py
+│   │   │   ├── 04_build_staging_orders_window.py
+│   │   │   ├── 05_merge_processed_orders_window.py
+│   │   │   ├── 06_build_market_hourly_summary_window.py
+│   │   │   └── 07_build_order_execution_summary_window.py
+│   │   │
+│   │   └── maintenance/
+│   │       └── .gitkeep
+│   │
 │   ├── ddl/
 │   │   ├── 00_create_raw_tables.sql
 │   │   ├── 01_create_namespaces.sql
@@ -388,8 +406,13 @@ binance-iceberg-lakehouse/
 │       └── 01_metadata_checks.sql
 │
 ├── orchestration/
-│   ├── lakehouse_daily_pipeline.py
-│   └── iceberg_maintenance.py
+│   ├── dags/
+│   │   ├── daily_lakehouse_pipeline.py
+│   │   └── iceberg_maintenance.py
+│   │
+│   └── scripts/
+│       ├── run_job.sh
+│       └── run_spark_sql.sh
 │
 ├── dashboard/
 └── tests/
@@ -401,6 +424,5 @@ binance-iceberg-lakehouse/
 - `docs/decisions.md` — 설계 결정 기록 (결정한 것 + 보류한 것 + 모르는 것)
 - `docs/architecture.md` — 아키텍처
 - `docs/simulator_design.md` — 주문 시뮬레이터 설계
-- `docs/roadmap.md` — Phase별 작업 항목
 - `docs/operations.md` — 운영 지표 / Airflow / 임계값
 - `docs/quicksight_metrics.md` — 대시보드 지표 정의

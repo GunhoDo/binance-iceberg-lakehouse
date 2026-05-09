@@ -303,7 +303,7 @@ MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
 
 향후 실시간 WebSocket kline 수집 시에는 raw message에 `x` 또는 `is_closed` 필드를 포함하고, processed layer에서 이를 `BOOLEAN`으로 변환한다.
 
-### D14. Staging table 운영 방식
+## D14. Staging table 운영 방식
 
 Phase 2 MVP에서는 MERGE source를 안정화하기 위해 staging table을 사용한다.
 
@@ -332,7 +332,7 @@ Phase 2에서는 `simulated_parameters`를 구조화된 Map/Struct로 강제 파
 
 향후 simulator parameter 분석이 필요해지면 별도 schema를 정의해 struct column 또는 별도 config table로 분리한다.
 
-### D16. Processed table COW/MOR 선택 기준
+## D16. Processed table COW/MOR 선택 기준
 
 Phase 2에서는 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merge-on-Read)를 구분한다.
 
@@ -355,6 +355,45 @@ Phase 2에서는 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merg
 - `rewrite_data_files`
 - `rewrite_manifests`
 - snapshot expiration
+
+## D17. Phase 3 Daily Job 멱등성 설계
+
+Phase 3에서는 기존 Phase 2 batch job을 그대로 Airflow DAG에 연결하지 않는다.
+
+Phase 2 job은 기능 검증과 테이블 적재 실험을 위한 구현이며, 일부 job은 raw 전체를 읽고 append하거나, execution window 없이 full aggregation을 수행한다. 이런 방식은 Airflow의 retry, re-run, backfill 환경에서 중복 적재나 불필요한 재처리 비용을 만들 수 있다.
+
+따라서 Phase 3에서는 Airflow 실행을 전제로 한 별도 daily job을 작성한다.
+
+Phase 3 daily job의 공통 실행 인자는 다음과 같다.
+
+- `--start-ts`: 처리 window 시작 시각, inclusive
+- `--end-ts`: 처리 window 종료 시각, exclusive
+- `--run-id`: Airflow run id 또는 수동 실행 id
+
+각 job은 `start_ts <= event_time < end_ts` 또는 해당 테이블의 도메인 시간 기준 window만 처리한다.
+
+테이블별 멱등성 기준은 다음과 같다.
+
+| Target table | Idempotency key | Write pattern |
+|---|---|---|
+| `processed_trades` | `trade_id` | `MERGE INTO`, 기존 trade는 skip |
+| `staging_klines` | `(source_topic, source_partition, source_offset)` | `MERGE INTO`, 기존 Kafka offset은 skip |
+| `processed_klines` | `(symbol, interval, open_time)` | `MERGE INTO`, 최신 kline 상태로 update |
+| `staging_orders` | `(source_topic, source_partition, source_offset)` | `MERGE INTO`, 기존 Kafka offset은 skip |
+| `processed_orders` | `order_id` | `MERGE INTO`, 최신 order 상태로 update |
+| `market_hourly_summary` | `(summary_hour, symbol)` | `MERGE INTO`, 동일 summary key update |
+| `order_execution_summary` | `(summary_hour, symbol)` | `MERGE INTO`, 동일 summary key update |
+
+이 설계를 통해 같은 execution window를 여러 번 실행해도 target table에 중복 row가 누적되지 않도록 한다.
+
+기존 `src/pipelines/` 코드는 Phase 2 구현 및 reference로 유지한다. Phase 3 Airflow-ready job은 `src/jobs/` 아래에 분리하여 작성한다.
+
+- `src/pipelines/`: Phase 2 batch/reference jobs
+- `src/jobs/daily/`: Phase 3 window-based idempotent daily jobs
+- `orchestration/dags/`: Airflow DAG definitions
+- `orchestration/scripts/`: Airflow 또는 수동 실행에서 사용하는 job wrapper scripts
+
+Airflow DAG는 Spark 처리 로직을 직접 포함하지 않고, task dependency, schedule, retry, logging만 담당한다. 실제 Spark 처리 로직은 `src/jobs/daily/`에 유지한다.
 
 ---
 
