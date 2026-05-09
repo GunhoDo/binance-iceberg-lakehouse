@@ -1,25 +1,21 @@
-# docker-compose.yml
+##############################################################
+# Binance Iceberg Lakehouse - Infra
 #
-# 본 MVP의 로컬 환경 정의 자리. PRD §16.1 (local Kafka → Docker → MSK 확장 방향)
-# 참조.
+# Streaming only:
+#   docker compose -f infra/docker-compose.yml --profile streaming up -d
 #
-# 본 스켈레톤은 의도적으로 비워둔다. 이유:
-#   - Kafka, Spark, Iceberg catalog의 정확한 이미지와 버전은 본인이 직접 사용해 본
-#     조합으로 채워야 한다.
-#   - 검증되지 않은 docker-compose 정의를 미리 박으면 README의 실행 절차가
-#     "검증되지 않은 명령" 으로 오염된다 (README "실행 안내" 정책 참조).
-#
-# 채워야 할 서비스 후보 (Phase 1):
-#   - kafka  (broker)
-#   - zookeeper or KRaft 모드 — 사용 이미지가 무엇을 요구하느냐에 따라 결정
-#   - spark  (master / worker — 또는 단일 driver 컨테이너)
-#   - iceberg catalog backend — Hadoop catalog는 별도 컨테이너가 필요 없을 수 있고,
-#                               REST catalog 또는 Hive metastore를 쓸 수도 있음
-#                               (decisions.md D8 참조)
-#
-# Phase 1 진입 시 본 파일을 채운다.
+# Airflow only:
+#   docker compose -f infra/docker-compose.yml --profile airflow up -d --build
+#   docker compose -f infra/docker-compose.yml --profile airflow down -v
+# Streaming + Airflow:
+#   docker compose -f infra/docker-compose.yml --profile streaming --profile airflow up -d --build
+#   docker compose -f infra/docker-compose.yml --profile streaming --profile airflow down -v
+##############################################################
 
 services:
+  # ---------------------------------------------------------------------------
+  # Kafka - streaming profile
+  # ---------------------------------------------------------------------------
   kafka:
     image: apache/kafka:3.7.0
     container_name: kafka
@@ -28,14 +24,232 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    profiles: ["streaming"]
+    networks:
+      - lakehouse
+
+  kafka-topic-init:
+    image: apache/kafka:3.7.0
+    container_name: kafka-topic-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+
+        echo "==> Creating Kafka topics"
+
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic trades \
+          --partitions 1 \
+          --replication-factor 1
+
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic klines \
+          --partitions 1 \
+          --replication-factor 1
+
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic orders \
+          --partitions 1 \
+          --replication-factor 1
+
+        echo "==> Kafka topics"
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka:29092 \
+          --list
+    profiles: ["streaming"]
+    networks:
+      - lakehouse
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    profiles: ["streaming"]
+    networks:
+      - lakehouse
+
+  # ---------------------------------------------------------------------------
+  # Spark runner - airflow profile
+  # ---------------------------------------------------------------------------
+  spark-runner:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.spark
+    container_name: spark-runner
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /workspace
+      PYSPARK_PYTHON: /usr/local/bin/python
+      PYSPARK_DRIVER_PYTHON: /usr/local/bin/python
+    volumes:
+      - ..:/workspace
+    profiles: ["airflow"]
+    networks:
+      - lakehouse
+
+  # ---------------------------------------------------------------------------
+  # Airflow - airflow profile
+  # ---------------------------------------------------------------------------
+  airflow-postgres:
+    image: postgres:15
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    profiles: ["airflow"]
+    networks:
+      - lakehouse
+
+  airflow-init:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.airflow
+    container_name: airflow-init
+    user: "0:0"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      spark-runner:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "binance-lakehouse-local-secret"
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: "airflow"
+      _AIRFLOW_WWW_USER_PASSWORD: "airflow"
+    volumes:
+      - ../orchestration/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: version
+    profiles: ["airflow"]
+    networks:
+      - lakehouse
+
+  airflow-webserver:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.airflow
+    container_name: airflow-webserver
+    user: "0:0"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-postgres:
+        condition: service_healthy
+      spark-runner:
+        condition: service_started
+    ports:
+      - "8081:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "binance-lakehouse-local-secret"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    volumes:
+      - ../orchestration/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    profiles: ["airflow"]
+    networks:
+      - lakehouse
+
+  airflow-scheduler:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.airflow
+    container_name: airflow-scheduler
+    user: "0:0"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-postgres:
+        condition: service_healthy
+      spark-runner:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "binance-lakehouse-local-secret"
+    volumes:
+      - ../orchestration/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: scheduler
+    profiles: ["airflow"]
+    networks:
+      - lakehouse
 
 volumes:
   kafka_data:
     driver: local
+
+  airflow_postgres_data:
+    driver: local
+
+  airflow_logs:
+    driver: local
+
+networks:
+  lakehouse:
+    driver: bridge

@@ -1,67 +1,84 @@
--- 06_create_observability_tables.sql
+-- 08_create_observability_tables.sql
 --
--- Observability tables. PRD §13.2 ~ §13.4, §11 (Append only).
+-- Phase 3 Observability tables.
 --
--- 세 table 모두 시간순 누적이며 update가 없다.
--- write pattern: append-only
--- table mode: append-only
--- reason: each pipeline run or health check appends a new observation row
+-- 세 테이블은 current-state table이 아니라 실행별/시점별 관측 로그 table이다.
+-- 따라서 append-only로 운영한다.
+--
+-- - data_quality_summary: 데이터 품질 검사 결과 누적
+-- - pipeline_run_summary: Airflow DAG/task 실행 결과 누적
+-- - table_health_summary: Iceberg metadata 기반 table health snapshot 누적
 
 -- ----------------------------------------------------------------------------
--- data_quality_summary  (PRD §13.2)
+-- data_quality_summary
 -- ----------------------------------------------------------------------------
 
--- TODO Phase 3
--- CREATE TABLE IF NOT EXISTS <catalog>.ops.data_quality_summary (
---     measured_at              TIMESTAMP,
---     raw_trade_count          BIGINT,
---     raw_kline_count          BIGINT,
---     raw_order_count          BIGINT,
---     processed_trade_count    BIGINT,
---     processed_kline_count    BIGINT,
---     processed_order_count    BIGINT,
---     duplicate_trade_count    BIGINT,
---     duplicate_order_count    BIGINT,
---     null_symbol_count        BIGINT,
---     invalid_price_count      BIGINT,
---     invalid_quantity_count   BIGINT,
---     freshness_lag_minutes    DECIMAL
--- )
--- USING iceberg;
+CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.data_quality_summary (
+    run_id              STRING,
+    checked_at          TIMESTAMP,
+    table_name          STRING,
+    check_name          STRING,
+    check_status        STRING,
+    row_count           BIGINT,
+    null_count          BIGINT,
+    duplicate_count     BIGINT,
+    warning_message     STRING
+)
+USING iceberg
+PARTITIONED BY (days(checked_at))
+TBLPROPERTIES (
+    'format-version' = '2'
+);
 
 -- ----------------------------------------------------------------------------
--- pipeline_run_summary  (PRD §13.3)
+-- pipeline_run_summary
 -- ----------------------------------------------------------------------------
 
--- TODO Phase 3
--- CREATE TABLE IF NOT EXISTS <catalog>.ops.pipeline_run_summary (
---     run_id                   STRING,
---     dag_id                   STRING,
---     task_id                  STRING,
---     run_start                TIMESTAMP,
---     run_end                  TIMESTAMP,
---     status                   STRING,
---     duration_seconds         DECIMAL,
---     retry_count              INT,
---     processed_row_count      BIGINT
--- )
--- USING iceberg;
+CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.pipeline_run_summary (
+    run_id              STRING,
+    pipeline_name       STRING,
+    task_name           STRING,
+    status              STRING,
+    started_at          TIMESTAMP,
+    ended_at            TIMESTAMP,
+    duration_sec        DOUBLE,
+    source_table        STRING,
+    target_table        STRING,
+    processed_rows      BIGINT,
+    error_message       STRING,
+    created_at          TIMESTAMP
+)
+USING iceberg
+PARTITIONED BY (days(created_at))
+TBLPROPERTIES (
+    'format-version' = '2'
+);
 
 -- ----------------------------------------------------------------------------
--- table_health_summary  (PRD §13.4)
+-- table_health_summary
 -- ----------------------------------------------------------------------------
 
--- TODO Phase 3
--- CREATE TABLE IF NOT EXISTS <catalog>.ops.table_health_summary (
---     measured_at              TIMESTAMP,
---     table_name               STRING,
---     snapshot_count           BIGINT,
---     file_count               BIGINT,
---     average_file_size_bytes  BIGINT,
---     small_file_count         BIGINT,
---     total_record_count       BIGINT,
---     last_commit_time         TIMESTAMP,
---     last_compaction_time     TIMESTAMP,
---     compaction_needed        BOOLEAN
--- )
--- USING iceberg;
+CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.table_health_summary (
+    run_id                      STRING,
+    checked_at                  TIMESTAMP,
+    table_name                  STRING,
+    table_mode                  STRING,
+
+    data_file_count             BIGINT,
+    position_delete_file_count  BIGINT,
+    equality_delete_file_count  BIGINT,
+    delete_to_data_file_ratio   DOUBLE,
+
+    avg_file_size_mb            DOUBLE,
+    total_size_mb               DOUBLE,
+    record_count                BIGINT,
+
+    manifest_count              BIGINT,
+    snapshot_count              BIGINT,
+    last_committed_at           TIMESTAMP
+)
+USING iceberg
+PARTITIONED BY (days(checked_at))
+TBLPROPERTIES (
+    'format-version' = '2'
+);

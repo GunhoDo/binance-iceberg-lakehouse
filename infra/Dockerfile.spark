@@ -1,0 +1,70 @@
+######################################################################
+# Spark runner image
+#
+# This container runs Spark jobs called by Airflow through docker exec.
+# Spark/Iceberg/Hadoop AWS jars are downloaded at image build time.
+######################################################################
+
+FROM python:3.12-slim-bookworm
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      openjdk-17-jdk \
+      curl \
+      wget \
+      git \
+      procps \
+      bash \
+      ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+WORKDIR /workspace
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+      pyspark==3.5.5 \
+      pandas \
+      pyarrow \
+      boto3 \
+      kafka-python \
+      tabulate
+
+RUN python - <<'PY'
+from pathlib import Path
+from urllib.request import urlretrieve
+import pyspark
+
+jars_dir = Path(pyspark.__file__).resolve().parent / "jars"
+jars_dir.mkdir(parents=True, exist_ok=True)
+
+jars = {
+    "iceberg-spark-runtime-3.5_2.12-1.7.0.jar": "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.7.0/iceberg-spark-runtime-3.5_2.12-1.7.0.jar",
+    "iceberg-aws-bundle-1.7.0.jar": "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.7.0/iceberg-aws-bundle-1.7.0.jar",
+    "hadoop-aws-3.3.4.jar": "https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar",
+    "aws-java-sdk-bundle-1.12.262.jar": "https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar",
+    "wildfly-openssl-1.0.7.Final.jar": "https://repo1.maven.org/maven2/org/wildfly/openssl/wildfly-openssl/1.0.7.Final/wildfly-openssl-1.0.7.Final.jar",
+}
+
+for filename, url in jars.items():
+    target = jars_dir / filename
+    print(f"Downloading {filename} -> {target}")
+    urlretrieve(url, target)
+
+print("Installed jars:")
+for path in jars_dir.glob("*iceberg*"):
+    print(path)
+for path in jars_dir.glob("*hadoop-aws*"):
+    print(path)
+for path in jars_dir.glob("*aws-java-sdk*"):
+    print(path)
+for path in jars_dir.glob("*wildfly*"):
+    print(path)
+PY
+
+CMD ["tail", "-f", "/dev/null"]

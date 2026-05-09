@@ -48,6 +48,7 @@ else
   sudo ./aws/install
 fi
 
+rm -rf aws awscliv2.zip
 aws --version
 
 cd "$PROJECT_ROOT"
@@ -161,7 +162,18 @@ fi
 } >> ~/.bashrc
 
 # -----------------------------------------------------------------------------
-# 8. AWS CLI configuration from .env
+# 8. Docker setup
+# -----------------------------------------------------------------------------
+curl -fsSL https://get.docker.com -o get-docker.sh
+
+sudo sh get-docker.sh
+
+sudo usermod -aG docker $USER
+newgrp docker
+
+
+# -----------------------------------------------------------------------------
+# 9. AWS CLI configuration from .env
 # -----------------------------------------------------------------------------
 echo "==> Configuring AWS CLI from .env"
 

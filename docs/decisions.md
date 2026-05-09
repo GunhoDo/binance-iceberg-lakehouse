@@ -123,11 +123,13 @@ processed layer에서도 `processed_trades`와 `processed_klines`를 분리한�
 
 ---
 
-## D5. Iceberg Table Mode — COW 기본
+## D5. Iceberg Table Mode 초기 결정 — COW 기본
 
 ### 결정
 
-MVP의 모든 processed/serving table은 COW (Copy-on-Write) 로 시작한다.
+Phase 2 초기 MVP에서는 구현 단순성과 snapshot 비교의 명확성을 위해 processed/serving table을 COW(Copy-on-Write) 중심으로 시작했다.
+
+이 결정은 이후 D16에서 table별 update 특성을 반영해 개정되었다. 현재 최종 기준은 D16을 따른다.
 
 ### 이유
 
@@ -144,7 +146,7 @@ MVP의 모든 processed/serving table은 COW (Copy-on-Write) 로 시작한다.
 
 - `processed_klines` 또는 `processed_orders`의 update 빈도가 높아져 row-level
   update 비용이 문제가 될 때 → 해당 테이블만 MOR로 전환을 검토한다.
-- Summary/serving table은 read-heavy이므로 MOR 전환 검토 대상이 아니다.
+- Summary/serving table은 이후 D16에서 Airflow window 재실행과 late event 반영 가능성을 고려해 MOR 대상으로 개정했다.
 
 ---
 
@@ -241,7 +243,7 @@ Apache Iceberg를 사용한다.
 ### 모르는 것 / 학습할 것
 
 - Iceberg MOR의 운영 디테일 (delete file 누적, position vs equality delete 차이).
-  지금은 COW만 쓰므로 학습을 보류했다. MOR 검토 시점에 깊이 학습한다.
+  Phase 2~3에서 MOR table을 도입했지만, delete file 증가와 read amplification의 장기 운영 정책은 계속 학습하고 검증한다.
 - Iceberg Glue Catalog와 local Hadoop catalog의 운영 차이.
 
 ---
@@ -256,7 +258,7 @@ Apache Iceberg를 사용한다.
 | Compaction 주기 | small file 발생률을 본 뒤 결정. | Phase 3 |  |  |
 | `expire_snapshots` 보존 기간 | 운영 정책에 따름. | Phase 3 |  |  |
 | PRD §13.5의 임계값 (`avg_file_size_mb < 64` 등) | PRD에 적힌 값은 **초기 시작 임계값**이며, 운영하며 조정한다. | Phase 3 후반 |  |  |
-| Table mode (`copy-on-write`, `merge-on-read`) | table별 update 특성에 따라 다르게 결정해야 한다. | Phase 2 | `processed_trades`: COW/Append<br>`processed_klines`: MOR<br>`processed_orders`: MOR<br>Serving tables: COW | kline/order는 MERGE 기반 update가 발생할 수 있으므로 확장성을 고려해 MOR로 설계한다. trades는 append-only이며, serving은 조회 중심이므로 COW가 적합하다. |
+| Table mode (`copy-on-write`, `merge-on-read`) | table별 update 특성에 따라 다르게 결정해야 한다. | Phase 2 후반 ~ Phase 3 | `processed_trades`: COW/Append<br>`processed_klines`: MOR<br>`processed_orders`: MOR<br>`market_hourly_summary`: MOR<br>`order_execution_summary`: MOR<br>`Observability tables`: Append only | kline/order는 MERGE 기반 update가 발생할 수 있으므로 MOR로 설계한다. serving table도 같은 `(symbol, summary_hour)` key에 대해 late event, 재처리, Airflow window 재실행으로 반복 MERGE될 수 있으므로 MOR로 관리한다. observability table은 실행별 로그이므로 append-only로 유지한다. |
 
 ---
 
@@ -303,7 +305,7 @@ MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
 
 향후 실시간 WebSocket kline 수집 시에는 raw message에 `x` 또는 `is_closed` 필드를 포함하고, processed layer에서 이를 `BOOLEAN`으로 변환한다.
 
-### D14. Staging table 운영 방식
+## D14. Staging table 운영 방식
 
 Phase 2 MVP에서는 MERGE source를 안정화하기 위해 staging table을 사용한다.
 
@@ -320,7 +322,7 @@ Dedup key는 다음과 같다.
 
 현재 테스트 데이터에서 duplicate key가 항상 관찰되는 것은 아니지만, 실시간 kline update와 주문 상태 전이 이벤트를 고려해 dedup 로직을 기본 설계로 둔다.
 
-향후 Airflow 도입 시 `batch_id` 또는 `run_id`를 추가해 실행 단위별 staging 관리로 확장한다.
+Phase 3에서는 `run_id`를 job 실행 인자로 전달하고, window 기반 job에서 같은 Kafka offset 또는 business key가 재처리되어도 target table에 중복 row가 누적되지 않도록 했다. staging table 자체에 `run_id` 컬럼을 저장하는 방식은 아직 도입하지 않았으며, execution unit별 staging 추적이 필요해지면 별도 컬럼 또는 current-state table로 확장한다.
 
 ## D15. Order simulator metadata 저장 방식
 
@@ -332,29 +334,204 @@ Phase 2에서는 `simulated_parameters`를 구조화된 Map/Struct로 강제 파
 
 향후 simulator parameter 분석이 필요해지면 별도 schema를 정의해 struct column 또는 별도 config table로 분리한다.
 
-### D16. Processed table COW/MOR 선택 기준
+## D16. Processed / Serving table COW/MOR 선택 기준
 
-Phase 2에서는 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merge-on-Read)를 구분한다.
+Phase 2 후반부터 table의 update 특성에 따라 COW(Copy-on-Write)와 MOR(Merge-on-Read)를 구분한다.
 
 | Table | Mode | 이유 |
 |---|---|---|
 | `processed_trades` | COW / Append | trade event는 append-only 성격이 강하고 기존 row update가 거의 없다. |
 | `processed_klines` | MOR | 실시간 kline stream에서는 같은 `(symbol, interval, open_time)` 키가 interval 종료 전까지 반복 update될 수 있다. |
 | `processed_orders` | MOR | 같은 `order_id`에 대해 `NEW → PARTIALLY_FILLED → FILLED` 또는 `NEW → CANCELED` 상태 전이가 발생한다. |
-| Serving tables | COW | dashboard/BI 조회 중심이므로 read performance와 단순한 snapshot 비교가 중요하다. |
+| `market_hourly_summary` | MOR | 같은 `(symbol, summary_hour)` 집계 row가 late event, 재처리, Airflow window 재실행으로 반복 MERGE될 수 있다. |
+| `order_execution_summary` | MOR | 같은 `(symbol, summary_hour)` 주문 KPI row가 late order event, 재처리, incremental aggregation으로 반복 MERGE될 수 있다. |
+| Observability tables | Append only | 실행별 관측 결과를 누적하는 log table이므로 기존 row를 update하지 않는다. |
 
-`processed_klines`와 `processed_orders`는 향후 데이터 증가와 update 빈도 증가를 고려해 MOR로 설계한다. MOR는 write 비용을 줄일 수 있지만, delete file 누적과 read amplification을 관리해야 한다.
+`processed_klines`, `processed_orders`, `market_hourly_summary`, `order_execution_summary`는 update 또는 MERGE 가능성이 있는 table이므로 MOR로 설계한다. MOR는 write 비용을 줄일 수 있지만, delete file 누적과 read amplification을 관리해야 한다.
 
 따라서 Phase 3 maintenance에서는 다음 항목을 관찰하고 관리한다.
 
 - data file count
-- delete file count
+- position delete file count
+- equality delete file count
 - delete/data file ratio
 - manifest count
 - snapshot count
 - `rewrite_data_files`
+- `rewrite_position_delete_files`
 - `rewrite_manifests`
 - snapshot expiration
+
+Observability table은 append-only log table이므로 `rewrite_position_delete_files` 대상이 아니다. 다만 small file이 누적될 경우 `rewrite_data_files` 대상에는 포함할 수 있다.
+
+## D17. Phase 3 Daily Job 멱등성 설계
+
+Phase 3에서는 기존 Phase 2 batch job을 그대로 Airflow DAG에 연결하지 않는다.
+
+Phase 2 job은 기능 검증과 테이블 적재 실험을 위한 구현이며, 일부 job은 raw 전체를 읽고 append하거나, execution window 없이 full aggregation을 수행한다. 이런 방식은 Airflow의 retry, re-run, backfill 환경에서 중복 적재나 불필요한 재처리 비용을 만들 수 있다.
+
+따라서 Phase 3에서는 Airflow 실행을 전제로 한 별도 daily job을 작성한다.
+
+Phase 3 daily job의 공통 실행 인자는 다음과 같다.
+
+- `--start-ts`: 처리 window 시작 시각, inclusive
+- `--end-ts`: 처리 window 종료 시각, exclusive
+- `--run-id`: Airflow run id 또는 수동 실행 id
+
+각 job은 `start_ts <= event_time < end_ts` 또는 해당 테이블의 도메인 시간 기준 window만 처리한다.
+
+테이블별 멱등성 기준은 다음과 같다.
+
+| Target table | Idempotency key | Write pattern |
+|---|---|---|
+| `processed_trades` | `trade_id` | `MERGE INTO`, 기존 trade는 skip |
+| `staging_klines` | `(source_topic, source_partition, source_offset)` | `MERGE INTO`, 기존 Kafka offset은 skip |
+| `processed_klines` | `(symbol, interval, open_time)` | `MERGE INTO`, 최신 kline 상태로 update |
+| `staging_orders` | `(source_topic, source_partition, source_offset)` | `MERGE INTO`, 기존 Kafka offset은 skip |
+| `processed_orders` | `order_id` | `MERGE INTO`, 최신 order 상태로 update |
+| `market_hourly_summary` | `(summary_hour, symbol)` | `MERGE INTO`, 동일 summary key update |
+| `order_execution_summary` | `(summary_hour, symbol)` | `MERGE INTO`, 동일 summary key update |
+
+이 설계를 통해 같은 execution window를 여러 번 실행해도 target table에 중복 row가 누적되지 않도록 한다.
+
+기존 `src/pipelines/` 코드는 Phase 2 구현 및 reference로 유지한다. Phase 3 Airflow-ready job은 `src/jobs/` 아래에 분리하여 작성한다.
+
+- `src/pipelines/`: Phase 2 batch/reference jobs
+- `src/jobs/daily/`: Phase 3 window-based idempotent daily jobs
+- `orchestration/dags/`: Airflow DAG definitions
+- `orchestration/scripts/`: Airflow 또는 수동 실행에서 사용하는 job wrapper scripts
+
+Airflow DAG는 Spark 처리 로직을 직접 포함하지 않고, task dependency, schedule, retry, logging만 담당한다. 실제 Spark 처리 로직은 `src/jobs/daily/`에 유지한다.
+
+### Airflow / Spark 실행 구조
+
+Phase 3에서는 Airflow 컨테이너에 Spark runtime을 직접 포함하지 않는다.
+
+Airflow 이미지는 orchestration 전용으로 유지하고, 실제 Spark job은 `spark-runner` 컨테이너에서 실행한다.
+
+```text
+Airflow BashOperator
+   ↓ docker exec
+spark-runner
+   ↓
+run_job_with_log.sh
+   ↓
+run_job.sh
+   ↓
+src/jobs/daily/*.py
+```
+
+이 구조를 선택한 이유는 다음과 같다.
+
+- Airflow 이미지를 Spark/JDK 의존성으로 무겁게 만들지 않는다.
+- Airflow는 orchestration 책임만 가진다.
+- Spark 실행 환경은 `Dockerfile.spark`에서 별도로 관리한다.
+- Spark/Iceberg/Hadoop AWS dependency는 `Dockerfile.spark`에서 preloading하여 런타임 Ivy/Maven 충돌을 줄인다.
+- Airflow 병렬 task 실행 시 Derby metastore 충돌을 피하기 위해 job별 `derby.system.home`을 분리한다.
+
+## D18. Observability table은 append-only log로 유지한다
+
+Phase 3에서는 다음 observability table을 추가한다.
+
+- `data_quality_summary`
+- `pipeline_run_summary`
+- `table_health_summary`
+
+이 table들은 최신 상태 하나만 유지하는 current-state table이 아니라, 실행별/시점별 관측 결과를 누적하는 log table이다.
+
+따라서 update 또는 merge가 아니라 append-only 방식으로 운영한다.
+
+| Table | Write pattern | Reason |
+|---|---|---|
+| `data_quality_summary` | Append only | 각 run의 품질 검사 결과를 누적한다. |
+| `pipeline_run_summary` | Append only | Airflow DAG/task 실행 이력을 누적한다. |
+| `table_health_summary` | Append only | Iceberg metadata 기반 table health snapshot을 시간순으로 누적한다. |
+
+`data_quality_summary`는 row count, null count, duplicate count, check status를 저장한다.
+
+`table_health_summary`는 Iceberg metadata table인 `files`, `manifests`, `snapshots`를 기반으로 다음 지표를 저장한다.
+
+- data file count
+- position delete file count
+- equality delete file count
+- delete/data file ratio
+- average file size
+- total size
+- record count
+- manifest count
+- snapshot count
+- last committed timestamp
+
+향후 최신 상태만 빠르게 조회해야 한다면 `current_table_health` 같은 별도 current-state table을 만들 수 있다. 이 경우 current-state table은 MERGE 기반으로 관리한다.
+
+
+Phase 3 구현 결과, `pipeline_run_summary`에는 Airflow task별 실행 결과가 append-only로 기록된다.
+
+기록 대상은 다음과 같다.
+
+- `run_id`
+- `pipeline_name`
+- `task_name`
+- `status`
+- `started_at`
+- `ended_at`
+- `duration_sec`
+- `error_message`
+- `created_at`
+
+실패한 task와 재시도 후 성공한 task가 모두 기록된다. 이는 의도한 동작이다. `pipeline_run_summary`는 current-state table이 아니라 실행 이력 log table이므로, 같은 `run_id`와 `task_name`에 대해 여러 row가 존재할 수 있다.
+
+## D19. Phase 3 Iceberg Maintenance 정책
+
+### 결정
+
+Phase 3에서는 Daily Pipeline DAG와 Iceberg Maintenance DAG를 분리한다.
+
+Daily Pipeline DAG는 Raw → Processed → Serving → Observability 흐름을 처리한다. Maintenance DAG는 Iceberg table의 파일 수, delete file, manifest, snapshot 상태를 관리한다.
+
+Maintenance DAG의 흐름은 다음과 같다.
+
+```text
+check_table_health_before
+   ↓
+run_iceberg_maintenance
+   ↓
+check_table_health_after
+```
+
+### Table policy
+
+| Table | Policy |
+|---|---|
+| `processed_trades` | COW_APPEND |
+| `processed_klines` | MOR |
+| `processed_orders` | MOR |
+| `market_hourly_summary` | MOR |
+| `order_execution_summary` | MOR |
+| `data_quality_summary` | APPEND_ONLY |
+| `pipeline_run_summary` | APPEND_ONLY |
+| `table_health_summary` | APPEND_ONLY |
+
+### Maintenance procedure
+
+- 모든 maintenance 대상 table에 `rewrite_data_files`를 적용할 수 있다.
+- MOR table에는 `rewrite_position_delete_files`를 적용한다.
+- 모든 maintenance 대상 table에 `rewrite_manifests`를 적용할 수 있다.
+- snapshot은 `expire_snapshots`로 보존 정책에 따라 정리한다.
+- `remove_orphan_files`는 위험도가 있으므로 MVP에서는 실행하지 않고 skip한다.
+
+### 이유
+
+MOR table은 update 비용을 줄이는 대신 delete file과 manifest가 누적될 수 있다. 따라서 table health를 먼저 측정하고, maintenance를 수행한 뒤 다시 table health를 측정해야 한다.
+
+Observability table은 append-only log table이므로 position delete rewrite 대상은 아니다. 다만 small file이 누적될 수 있으므로 data file compaction 대상에는 포함할 수 있다.
+
+### 재검토 시점
+
+- delete/data file ratio가 기준값을 지속적으로 초과할 때
+- manifest count가 증가해 query planning 시간이 길어질 때
+- snapshot 수가 증가해 metadata 관리 비용이 커질 때
+- orphan file cleanup을 안전하게 검증할 수 있는 별도 실험 환경을 마련했을 때
 
 ---
 
