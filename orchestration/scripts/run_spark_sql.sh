@@ -8,15 +8,21 @@ if [ "$#" -lt 1 ]; then
   echo ""
   echo "Examples:"
   echo "  $0 src/ddl/07_create_serving_tables.sql"
-  echo "  $0 src/pipelines/03_merge_kline_updates.sql"
   echo "  $0 -e \"SHOW TABLES IN glue.binance_lakehouse;\""
   exit 1
 fi
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-SPARK_PACKAGES="${SPARK_PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.0,org.apache.iceberg:iceberg-aws-bundle:1.7.0,org.apache.hadoop:hadoop-aws:3.3.4}"
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  set -a
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
+
+DERBY_HOME="/tmp/derby-sql-$(date +%s)-$$"
+mkdir -p "$DERBY_HOME"
 
 GLUE_CATALOG_NAME="${GLUE_CATALOG_NAME:-glue}"
 GLUE_WAREHOUSE="${GLUE_WAREHOUSE:-s3://binance-iceberg-lake/warehouse}"
@@ -32,12 +38,13 @@ if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
 fi
 
 COMMON_ARGS=(
-  --packages "$SPARK_PACKAGES"
+  --conf "spark.driver.extraJavaOptions=-Dderby.system.home=${DERBY_HOME}"
   --conf "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}=org.apache.iceberg.spark.SparkCatalog"
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog"
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}.warehouse=${GLUE_WAREHOUSE}"
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}.io-impl=org.apache.iceberg.aws.s3.S3FileIO"
+  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
   --conf "spark.sql.parquet.enableVectorizedReader=false"
   --conf "spark.sql.iceberg.vectorization.enabled=false"
   --conf "spark.sql.shuffle.partitions=${SPARK_SHUFFLE_PARTITIONS}"
@@ -45,8 +52,10 @@ COMMON_ARGS=(
 )
 
 echo "==> Running Spark SQL"
+echo "    project  : $PROJECT_ROOT"
 echo "    warehouse: $GLUE_WAREHOUSE"
-echo "    catalog: $GLUE_CATALOG_NAME"
+echo "    catalog  : $GLUE_CATALOG_NAME"
+echo "    derby    : $DERBY_HOME"
 
 if [ "$1" = "-e" ]; then
   if [ "$#" -lt 2 ]; then
@@ -54,12 +63,15 @@ if [ "$1" = "-e" ]; then
     exit 1
   fi
 
-  spark-sql "${COMMON_ARGS[@]}" -e "$2"
+  SQL_QUERY="$2"
+  spark-sql "${COMMON_ARGS[@]}" -e "$SQL_QUERY"
 else
   SQL_FILE="$1"
 
   if [ ! -f "$SQL_FILE" ]; then
     echo "ERROR: sql file not found: $SQL_FILE"
+    echo "PROJECT_ROOT=$PROJECT_ROOT"
+    echo "PWD=$(pwd)"
     exit 1
   fi
 

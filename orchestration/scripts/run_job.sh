@@ -22,8 +22,6 @@ if [ ! -f "$JOB_PATH" ]; then
   exit 1
 fi
 
-SPARK_PACKAGES="${SPARK_PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.0,org.apache.iceberg:iceberg-aws-bundle:1.7.0,org.apache.hadoop:hadoop-aws:3.3.4}"
-
 export PYTHONPATH="${PYTHONPATH:-.}"
 
 if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
@@ -31,20 +29,28 @@ if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
   export PYSPARK_DRIVER_PYTHON="${PYSPARK_DRIVER_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 fi
 
+JOB_BASENAME="$(basename "$JOB_PATH" .py | tr -c 'A-Za-z0-9_' '_')"
+SAFE_RUN_ID="$(echo "$RUN_ID" | tr -c 'A-Za-z0-9_' '_')"
+DERBY_HOME="/tmp/derby-${SAFE_RUN_ID}-${JOB_BASENAME}"
+
+mkdir -p "$DERBY_HOME"
+
 echo "==> Run Phase3 Spark job"
 echo "project  : $PROJECT_ROOT"
 echo "job      : $JOB_PATH"
 echo "start_ts : $START_TS"
 echo "end_ts   : $END_TS"
 echo "run_id   : $RUN_ID"
+echo "derby    : $DERBY_HOME"
 
 spark-submit \
-  --packages "$SPARK_PACKAGES" \
+  --conf "spark.driver.extraJavaOptions=-Dderby.system.home=${DERBY_HOME}" \
   --conf "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions" \
   --conf "spark.sql.catalog.glue=org.apache.iceberg.spark.SparkCatalog" \
   --conf "spark.sql.catalog.glue.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog" \
   --conf "spark.sql.catalog.glue.warehouse=s3://binance-iceberg-lake/warehouse" \
   --conf "spark.sql.catalog.glue.io-impl=org.apache.iceberg.aws.s3.S3FileIO" \
+  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider" \
   --conf "spark.sql.parquet.enableVectorizedReader=false" \
   --conf "spark.sql.iceberg.vectorization.enabled=false" \
   --conf "spark.sql.shuffle.partitions=8" \
