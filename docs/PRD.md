@@ -241,36 +241,51 @@ QuickSight
 Airflow 확장 후 구조는 다음과 같다.
 
 ```text
-Streaming Collectors
-   ↓
-Raw Zone
-
 Airflow Daily Pipeline DAG
-   ↓
-build_processed_trades
-   ↓
-build_processed_klines        # raw_klines → staging_klines
-   ↓
-merge_kline_updates           # staging_klines → processed_klines
-   ↓
-build_processed_orders        # raw_orders → staging_orders
-   ↓
-merge_order_status_updates    # staging_orders → processed_orders
-   ↓
-build_serving_summaries
-   ↓
-check_data_quality
-   ↓
-check_table_health
 
-Airflow Maintenance DAG
-   ↓
-check_small_files
-   ↓
-compact_tables
-   ↓
-check_after_compaction
+build_processed_trades ───────────────┐
+                                      ├── build_market_hourly_summary
+build_staging_klines → merge_processed_klines ┘
+
+build_staging_orders → merge_processed_orders → build_order_execution_summary
+
+build_market_hourly_summary
+build_order_execution_summary
+        ↓
+check_data_quality
+        ↓
+check_table_health
 ```
+
+Daily Pipeline DAG는 Spark 로직을 직접 포함하지 않는다. Airflow는 task dependency, schedule, retry, logging만 담당하고, 실제 Spark job은 `spark-runner` 컨테이너 안에서 실행한다.
+
+실행 구조는 다음과 같다.
+
+```text
+Airflow BashOperator
+   ↓ docker exec
+spark-runner container
+   ↓
+orchestration/scripts/run_job_with_log.sh
+   ↓
+orchestration/scripts/run_job.sh
+   ↓
+src/jobs/daily/*.py
+```
+
+`run_job_with_log.sh`는 각 task의 실행 결과를 `pipeline_run_summary`에 append-only로 기록한다.
+
+Airflow Maintenance DAG는 Daily Pipeline DAG와 분리한다.
+
+```text
+check_table_health_before
+   ↓
+run_iceberg_maintenance
+   ↓
+check_table_health_after
+```
+
+Maintenance job은 table policy에 따라 `rewrite_data_files`, `rewrite_position_delete_files`, `rewrite_manifests`, `expire_snapshots`를 수행한다. `remove_orphan_files`는 위험도가 있으므로 MVP에서는 실행하지 않고 skip한다.
 
 ---
 
@@ -520,6 +535,10 @@ Observability table은 누적형 로그 테이블이다. 각 pipeline run 또는
 
 향후 최신 상태 조회가 필요해지면 `current_table_health`, `current_pipeline_status` 같은 별도 current-state table을 만들고, 해당 table에 MOR를 적용한다.
 
+실제 Phase 3 구현에서는 `market_hourly_summary`, `order_execution_summary`도 동일 summary key에 대해 window 재실행, late event 반영, backfill 시 반복 MERGE될 수 있으므로 MOR 대상으로 관리한다.
+
+단, Observability table은 current-state table이 아니라 append-only log table이므로 MOR 대상이 아니다. `data_quality_summary`, `pipeline_run_summary`, `table_health_summary`는 실행별 관측 결과를 새 row로 누적한다. 다만 append-only table도 small file이 누적될 수 있으므로 `rewrite_data_files` 대상에는 포함할 수 있다.
+
 ---
 
 ## 12. Iceberg Experiments
@@ -709,39 +728,57 @@ Kafka 수집기와 streaming job은 장기 실행 프로세스다.
 
 ### 14.2 Daily Pipeline DAG
 
+Phase 3에서는 Airflow-ready daily job을 `src/jobs/daily/` 아래에 별도로 작성한다. 기존 `src/pipelines/`는 Phase 2 reference 구현으로 유지한다.
+
+Daily job은 다음 공통 인자를 받는다.
+
+- `--start-ts`
+- `--end-ts`
+- `--run-id`
+
+DAG 구조는 다음과 같다.
+
 ```text
-build_processed_trades
-   ↓
-build_processed_klines        # raw_klines → staging_klines
-   ↓
-merge_kline_updates           # staging_klines → processed_klines
-   ↓
-build_processed_orders
-   ↓
-merge_order_status_updates
-   ↓
+build_processed_trades ───────────────┐
+                                      ├── build_market_hourly_summary
+build_staging_klines → merge_processed_klines ┘
+
+build_staging_orders → merge_processed_orders → build_order_execution_summary
+
 build_market_hourly_summary
-   ↓
 build_order_execution_summary
-   ↓
+        ↓
 check_data_quality
-   ↓
+        ↓
 check_table_health
 ```
 
+각 task는 `run_job_with_log.sh`를 통해 실행되며, task별 실행 결과는 `pipeline_run_summary`에 append-only로 기록한다.
+
+Airflow는 Spark 로직을 직접 실행하지 않고, `docker exec spark-runner` 방식으로 Spark 실행 컨테이너에 job 실행을 위임한다.
+
 ### 14.3 Maintenance DAG
 
+Maintenance DAG는 Daily Pipeline DAG와 분리한다. 데이터 처리 목적과 Iceberg table 유지보수 목적이 다르기 때문이다.
+
 ```text
-check_small_files
+check_table_health_before
    ↓
-compact_processed_tables
+run_iceberg_maintenance
    ↓
-compact_serving_tables
-   ↓
-check_after_compaction
+check_table_health_after
 ```
 
-Pipeline DAG와 Maintenance DAG는 분리한다. 데이터 처리 흐름과 Iceberg 유지보수 작업의 실행 목적이 다르기 때문이다.
+`run_iceberg_maintenance`는 table policy에 따라 다음 작업을 수행한다.
+
+- `rewrite_data_files`
+- MOR table 대상 `rewrite_position_delete_files`
+- `rewrite_manifests`
+- `expire_snapshots`
+- `remove_orphan_files`는 MVP에서 skip
+
+Maintenance 전후의 table 상태는 `table_health_summary`에 append-only로 저장한다.
+
 
 ---
 
@@ -879,8 +916,22 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - `data_quality_summary` 생성
 - `pipeline_run_summary` 생성
 - `table_health_summary` 생성
-- Daily pipeline DAG 구현
-- Maintenance DAG 구현
+- window 기반 idempotent daily jobs 구현
+- `run_job.sh` 작성
+- `run_spark_sql.sh` 작성
+- `run_job_with_log.sh` 작성
+- Airflow Daily Pipeline DAG 구현
+- Airflow Maintenance DAG 구현
+- Airflow / Spark runner 컨테이너 분리
+- Docker Compose profile 분리
+  - `streaming`
+  - `airflow`
+- Kafka topic 자동 생성
+- Spark dependency를 `Dockerfile.spark`에서 preloading
+- Derby metastore 충돌 방지를 위한 job별 `derby.system.home` 분리
+- Pipeline 실행 결과를 `pipeline_run_summary`에 append-only로 기록
+- Data quality 결과를 `data_quality_summary`에 append-only로 기록
+- Iceberg table health 결과를 `table_health_summary`에 append-only로 기록
 
 ### Phase 4. QuickSight Dashboard
 
@@ -924,6 +975,16 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - Pipeline run summary를 생성할 수 있다.
 - Table health summary를 생성할 수 있다.
 - QuickSight에서 market, order, data quality, operation 지표를 확인할 수 있다.
+
+Phase 3는 다음 조건을 만족하면 완료로 본다.
+
+- Airflow UI에서 `daily_lakehouse_pipeline` DAG를 실행할 수 있다.
+- `daily_lakehouse_pipeline`의 주요 task가 SUCCESS 상태로 완료된다.
+- `pipeline_run_summary`에 task별 실행 이력이 append-only로 기록된다.
+- 실패 후 retry 또는 재실행 이력이 `pipeline_run_summary`에 함께 보존된다.
+- `data_quality_summary`에 품질 검사 결과가 저장된다.
+- `table_health_summary`에 Iceberg metadata 기반 health snapshot이 저장된다.
+- `iceberg_maintenance` DAG가 Airflow에 등록되고, maintenance 전후 table health check 구조를 가진다.
 
 ---
 
