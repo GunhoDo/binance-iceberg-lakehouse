@@ -12,7 +12,7 @@
 -- source: processed_klines (OHLCV 기준) + processed_trades (보조 지표)
 -- key: (symbol, summary_hour)
 -- write pattern: MERGE
--- table mode: COW
+-- table mode: MOR
 -- Phase 2 MVP: full aggregation 후 동일 key는 UPDATE, 신규 key는 INSERT
 -- Future: Airflow execution window 기준 incremental aggregation
 
@@ -42,9 +42,9 @@ USING iceberg
 PARTITIONED BY (days(summary_hour))
 TBLPROPERTIES (
     'format-version' = '2',
-    'write.update.mode' = 'copy-on-write',
-    'write.merge.mode' = 'copy-on-write',
-    'write.delete.mode' = 'copy-on-write'
+    'write.update.mode' = 'merge-on-read',
+    'write.merge.mode' = 'merge-on-read',
+    'write.delete.mode' = 'merge-on-read'
 );
 
 -- ----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ USING iceberg
 PARTITIONED BY (days(summary_hour))
 TBLPROPERTIES (
     'format-version' = '2',
-    'write.update.mode' = 'copy-on-write',
-    'write.merge.mode' = 'copy-on-write',
-    'write.delete.mode' = 'copy-on-write'
+    'write.update.mode' = 'merge-on-read',
+    'write.merge.mode' = 'merge-on-read',
+    'write.delete.mode' = 'merge-on-read'
 );
