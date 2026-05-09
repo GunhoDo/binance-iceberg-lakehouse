@@ -3,6 +3,9 @@
 -- Observability tables. PRD §13.2 ~ §13.4, §11 (Append only).
 --
 -- 세 table 모두 시간순 누적이며 update가 없다.
+-- write pattern: append-only
+-- table mode: append-only
+-- reason: each pipeline run or health check appends a new observation row
 
 -- ----------------------------------------------------------------------------
 -- data_quality_summary  (PRD §13.2)
