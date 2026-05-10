@@ -10,6 +10,9 @@
 # Streaming + Airflow:
 #   docker compose -f infra/docker-compose.yml --profile streaming --profile airflow up -d --build
 #   docker compose -f infra/docker-compose.yml --profile streaming --profile airflow down -v
+# Grafana only:
+#   docker compose -f infra/docker-compose.yml --profile grafana up -d
+#   docker compose -f infra/docker-compose.yml --profile grafana down -v
 ##############################################################
 
 services:
@@ -103,6 +106,27 @@ services:
       kafka:
         condition: service_healthy
     profiles: ["streaming"]
+    networks:
+      - lakehouse
+  
+  # ---------------------------------------------------------------------------
+  # Grafana - grafana profile
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_PLUGINS_PREINSTALL: grafana-athena-datasource
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../dashboard/grafana/provisioning:/etc/grafana/provisioning
+      - ../dashboard/grafana/dashboards:/etc/grafana/dashboards
+    profiles: ["grafana"]
     networks:
       - lakehouse
 
@@ -248,6 +272,9 @@ volumes:
     driver: local
 
   airflow_logs:
+    driver: local
+  
+  grafana_data:
     driver: local
 
 networks:

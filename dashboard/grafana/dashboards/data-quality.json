@@ -1,0 +1,140 @@
+{
+  "uid": "lakehouse-data-quality",
+  "title": "Lakehouse Data Quality",
+  "tags": ["data-quality", "lakehouse", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "2024-01-01T00:00:00Z",
+    "to": "2024-03-01T00:00:00Z"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Latest Checked Tables",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(DISTINCT table_name) AS checked_tables FROM data_quality_summary WHERE checked_at = (SELECT MAX(checked_at) FROM data_quality_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Latest Total Rows",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(row_count) AS total_rows FROM data_quality_summary WHERE checked_at = (SELECT MAX(checked_at) FROM data_quality_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Latest Null Count",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(null_count) AS null_count FROM data_quality_summary WHERE checked_at = (SELECT MAX(checked_at) FROM data_quality_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Latest Duplicate Count",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(duplicate_count) AS duplicate_count FROM data_quality_summary WHERE checked_at = (SELECT MAX(checked_at) FROM data_quality_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Row Count by Table",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT checked_at AS time, table_name, row_count FROM data_quality_summary WHERE checked_at >= (SELECT MAX(checked_at) - INTERVAL '30' DAY FROM data_quality_summary) ORDER BY checked_at, table_name"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Null / Duplicate Count",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT checked_at AS time, SUM(null_count) AS null_count, SUM(duplicate_count) AS duplicate_count FROM data_quality_summary WHERE checked_at >= (SELECT MAX(checked_at) - INTERVAL '30' DAY FROM data_quality_summary) GROUP BY checked_at ORDER BY checked_at"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Latest Quality Check by Table",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY table_name, check_name ORDER BY checked_at DESC) AS rn FROM data_quality_summary) SELECT checked_at, table_name, check_name, check_status, row_count, null_count, duplicate_count, warning_message, run_id FROM ranked WHERE rn = 1 ORDER BY table_name, check_name"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 }
+    }
+  ]
+}
