@@ -1,0 +1,162 @@
+{
+  "uid": "order-execution-summary",
+  "title": "Order Execution Summary",
+  "tags": ["binance", "orders", "lakehouse"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "2024-01-01T00:00:00Z",
+    "to": "2024-03-01T00:00:00Z"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Fill Rate (%)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT AVG(fill_rate) * 100 AS fill_rate_pct FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 90 },
+              { "color": "green", "value": 98 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Cancel Rate (%)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT AVG(cancel_rate) * 100 AS cancel_rate_pct FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total Orders",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(total_orders) AS total_orders FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Avg Fill Delay (sec)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT AVG(avg_fill_delay_sec) AS avg_fill_delay_sec FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Fill / Cancel Rate Trend",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT summary_hour AS time, fill_rate * 100 AS fill_rate_pct, cancel_rate * 100 AS cancel_rate_pct FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Hourly Orders",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT summary_hour AS time, total_orders, filled_orders, canceled_orders FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Order Quantity Trend",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT summary_hour AS time, CAST(total_order_qty AS DOUBLE) AS total_order_qty, CAST(total_filled_qty AS DOUBLE) AS total_filled_qty FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Recent Order Execution Summary",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT summary_hour, symbol, total_orders, filled_orders, canceled_orders, fill_rate, cancel_rate, avg_fill_delay_sec, avg_order_qty, avg_filled_qty, total_order_qty, total_filled_qty, updated_at FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour DESC LIMIT 100"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 }
+    }
+  ]
+}

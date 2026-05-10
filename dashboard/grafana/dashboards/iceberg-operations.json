@@ -1,0 +1,212 @@
+{
+  "uid": "iceberg-table-operations",
+  "title": "Iceberg Table Operations",
+  "tags": ["iceberg", "operations", "lakehouse"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "2024-01-01T00:00:00Z",
+    "to": "2024-03-01T00:00:00Z"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Latest Data Files",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(data_file_count) AS data_file_count FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Position Delete Files",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(position_delete_file_count) AS position_delete_file_count FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Avg Delete/Data Ratio",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT AVG(delete_to_data_file_ratio) AS delete_to_data_file_ratio FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.3 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Avg File Size MB",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT AVG(avg_file_size_mb) AS avg_file_size_mb FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 16 },
+              { "color": "green", "value": 64 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Snapshot Count",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(snapshot_count) AS snapshot_count FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Manifest Count",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(manifest_count) AS manifest_count FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Total Records",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(record_count) AS record_count FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 6 }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Total Size MB",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT SUM(total_size_mb) AS total_size_mb FROM table_health_summary WHERE checked_at = (SELECT MAX(checked_at) FROM table_health_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 6 }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "File Count Trend",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT checked_at AS time, table_name, data_file_count, position_delete_file_count, equality_delete_file_count FROM table_health_summary WHERE checked_at >= (SELECT MAX(checked_at) - INTERVAL '30' DAY FROM table_health_summary) ORDER BY checked_at, table_name"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Snapshot / Manifest Count Trend",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT checked_at AS time, table_name, snapshot_count, manifest_count FROM table_health_summary WHERE checked_at >= (SELECT MAX(checked_at) - INTERVAL '30' DAY FROM table_health_summary) ORDER BY checked_at, table_name"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Latest Table Health by Table",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY table_name ORDER BY checked_at DESC) AS rn FROM table_health_summary) SELECT checked_at, table_name, table_mode, data_file_count, position_delete_file_count, equality_delete_file_count, delete_to_data_file_ratio, avg_file_size_mb, total_size_mb, record_count, manifest_count, snapshot_count, last_committed_at, run_id FROM ranked WHERE rn = 1 ORDER BY table_name"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 20 }
+    }
+  ]
+}
