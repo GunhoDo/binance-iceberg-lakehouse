@@ -33,8 +33,8 @@ def spark_job_task(task_id: str, job_path: str) -> BashOperator:
           {PROJECT_ROOT}/orchestration/scripts/run_job_with_log.sh \
           {task_id} \
           {job_path} \
-          "{{{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
-          "{{{{ data_interval_end.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
+          "{{{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:%SZ') }}}}" \
+          "{{{{ data_interval_end.strftime('%Y-%m-%dT%H:%M:%SZ') }}}}" \
           "{{{{ run_id }}}}"
         """,
     )
@@ -61,14 +61,14 @@ with DAG(
         "src/jobs/daily/02_build_staging_klines_window.py",
     )
 
-    merge_processed_klines = spark_job_task(
-        "merge_processed_klines",
-        "src/jobs/daily/03_merge_processed_klines_window.py",
-    )
-
     build_staging_orders = spark_job_task(
         "build_staging_orders",
-        "src/jobs/daily/04_build_staging_orders_window.py",
+        "src/jobs/daily/03_build_staging_orders_window.py",
+    )
+
+    merge_processed_klines = spark_job_task(
+        "merge_processed_klines",
+        "src/jobs/daily/04_merge_processed_klines_window.py",
     )
 
     merge_processed_orders = spark_job_task(

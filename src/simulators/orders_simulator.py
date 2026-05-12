@@ -19,18 +19,18 @@ Iceberg MERGE 기반 주문 상태 관리 실험을 위해 synthetic order event
     python src/simulators/orders_simulator.py \
       --bootstrap localhost:9092 \
       --topic orders \
-      --num-orders 1000 \
+      --num-orders 10000 \
       --reference-close 43000
 
     python src/simulators/orders_simulator.py \
       --bootstrap localhost:9092 \
       --topic orders \
-      --num-orders 1000 \
+      --num-orders 10000 \
       --reference-close 43000 \
       --symbol BTCUSDT \
-      --start-ts 2024-02-01T00:00:00 \
-      --end-ts 2024-03-01T00:00:00 \
-      --order-id-prefix 202402 \
+        --start-ts 2024-01-01T00:00:00Z \
+        --end-ts 2024-02-01T00:00:00Z \
+      --order-id-prefix 202401 \
       --seed 42
 """
 from __future__ import annotations
