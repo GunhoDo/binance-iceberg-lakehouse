@@ -23,7 +23,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS binance_lakehouse.raw_trades (
     message_value     STRING,
     ingest_time       STRING
 )
-PARTITIONED BY (year STRING, month STRING)
+PARTITIONED BY (ingest_date STRING)
 STORED AS PARQUET
 LOCATION 's3://binance-iceberg-lake/raw/trades/';
 
@@ -36,7 +36,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS binance_lakehouse.raw_klines (
     message_value     STRING,
     ingest_time       STRING
 )
-PARTITIONED BY (year STRING, month STRING)
+PARTITIONED BY (ingest_date STRING)
 STORED AS PARQUET
 LOCATION 's3://binance-iceberg-lake/raw/klines/';
 
@@ -49,7 +49,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS binance_lakehouse.raw_orders (
     message_value     STRING,
     ingest_time       STRING
 )
-PARTITIONED BY (year STRING, month STRING)
+PARTITIONED BY (ingest_date STRING)
 STORED AS PARQUET
 LOCATION 's3://binance-iceberg-lake/raw/orders/';
 

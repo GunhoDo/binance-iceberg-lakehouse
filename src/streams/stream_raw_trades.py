@@ -42,8 +42,7 @@ def run() -> None:
         F.col("timestamp").cast("long").alias("kafka_timestamp"),
         F.col("key").cast("string").alias("message_key"),
         F.col("value").cast("string").alias("message_value"),
-        F.date_format(F.current_timestamp(), "yyyy").alias("year"),
-        F.date_format(F.current_timestamp(), "MM").alias("month"),
+        F.date_format(F.current_timestamp(), "yyyy-MM-dd").alias("ingest_date"),
         F.current_timestamp().cast("string").alias("ingest_time"),
     )
 
@@ -53,7 +52,7 @@ def run() -> None:
         .outputMode("append")
         .option("path", OUTPUT_PATH)
         .option("checkpointLocation", CHECKPOINT_PATH)
-        .partitionBy("year", "month")
+        .partitionBy("ingest_date")
         .trigger(processingTime="30 seconds")
         .start()
     )

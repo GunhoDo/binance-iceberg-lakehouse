@@ -47,8 +47,15 @@ def run() -> None:
 
     raw_df = spark.read.parquet(RAW_KLINES_PATH)
 
+    start_date = F.date_format(F.to_timestamp(F.lit(args.start_ts)), "yyyy-MM-dd")
+    end_date = F.date_format(F.to_timestamp(F.lit(args.end_ts)), "yyyy-MM-dd")
+    partitioned_raw_df = raw_df.where(
+        (F.col("ingest_date") >= start_date)
+        & (F.col("ingest_date") <= end_date)
+    )
+
     windowed_raw_df = (
-        raw_df
+        partitioned_raw_df
         .withColumn("ingest_ts", F.to_timestamp(F.col("ingest_time")))
         .where(
             (F.col("ingest_ts") >= F.to_timestamp(F.lit(args.start_ts)))
