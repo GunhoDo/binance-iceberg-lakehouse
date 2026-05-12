@@ -541,7 +541,7 @@ Observability table은 append-only log table이므로 position delete rewrite �
 
 - Iceberg MOR 운영 디테일 — 위 D8 참조.
 - Glue Catalog 운영, IAM 권한 모델 — 클라우드 확장 시 별도 학습 필요.
-- QuickSight 권한 / 데이터셋 새로고침 정책.
+- Grafana 권한 / datasource 운영 정책.
 - Spark Structured Streaming의 checkpoint 손상 시 복구 절차 — 실제로 손상시켜 보고
   익혀야 함.
 - Iceberg manifest 파일 구조 — metadata 조회는 가능하지만 내부 동작까지 깊이 알지는

@@ -1,6 +1,6 @@
 # Operations
 
-본 문서는 PRD §13(Observability Plan)과 §14(Airflow Plan)을 운영 관점에서 정리한다. 임의의 도구나 임계값을 추가하지 않고, 현재 구현된 Phase 3 구조를 기준으로 작성한다.
+본 문서는 PRD §13(Observability Plan), §14(Airflow Plan), §15(Grafana Dashboard Plan)을 운영 관점에서 정리한다. 임의의 도구나 임계값을 추가하지 않고, 현재 구현된 Airflow/observability/Grafana 구조를 기준으로 작성한다.
 
 ## 1. 운영 관점의 목표
 
@@ -168,7 +168,7 @@ src/jobs/daily/09_check_table_health.py
 | `delete_to_data_file_ratio` | `> 0.5` |
 | `manifest_count` | `> 20` |
 
-현재 Phase 3 구현에서는 모든 임계값 기반 alerting을 자동화하지 않는다. 우선 `data_quality_summary`, `pipeline_run_summary`, `table_health_summary`에 관측값을 남기고, Phase 4 QuickSight 또는 Athena view에서 시각화/판단하는 구조로 둔다.
+현재 구현에서는 모든 임계값 기반 alerting을 자동화하지 않는다. `data_quality_summary`, `pipeline_run_summary`, `table_health_summary`에 관측값을 남기고, Grafana dashboard와 Athena query에서 시각화/판단하는 구조로 둔다.
 
 ---
 
@@ -394,10 +394,24 @@ LIMIT 20;
 
 ---
 
-## 11. 보류 항목
+## 11. Grafana Dashboard 운영
+
+Grafana dashboard는 `dashboard/grafana/dashboards/*.json`에 구현되어 있으며, Athena datasource `athena_iceberg`를 통해 serving/observability table을 직접 조회한다.
+
+구현된 dashboard:
+
+- `binance-market-overview.json`: `market_hourly_summary`
+- `order-execution.json`: `order_execution_summary`
+- `data-quality.json`: `data_quality_summary`
+- `iceberg-operations.json`: `table_health_summary`
+
+현재는 별도 compatibility view 없이 table을 직접 조회한다. 따라서 `09_grafana_views.sql` 같은 placeholder DDL은 유지하지 않는다. 지표와 panel 기준은 `docs/grafana_metrics.md`에 정리한다.
+
+---
+
+## 12. 보류 항목
 
 - 알람 채널은 Phase 3에서 추가하지 않는다.
-- QuickSight dashboard는 Phase 4에서 구성한다.
 - `remove_orphan_files`는 위험도가 있으므로 MVP에서는 실행하지 않는다.
 - `current_table_health`, `current_pipeline_status` 같은 current-state table은 아직 만들지 않는다.
-- 임계값 기반 자동 alerting은 Phase 4 이후에 검토한다.
+- Grafana alert rule/provisioning 기반 자동 alerting은 dashboard 운영 이후에 검토한다.

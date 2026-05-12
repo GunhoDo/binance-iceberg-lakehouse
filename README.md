@@ -100,7 +100,7 @@ table_health_summary
 
 Phase 4
    ↓
-Athena / QuickSight
+Athena / Grafana
 ```
 
 ---
@@ -116,7 +116,7 @@ Athena / QuickSight
 | Catalog | AWS Glue Catalog |
 | Storage | AWS S3 |
 | Orchestration | Apache Airflow |
-| Query / BI | Athena, QuickSight |
+| Query / BI | Athena, Grafana |
 | Infra | Docker Compose profiles, Spark runner container |
 
 ---
@@ -352,7 +352,7 @@ binance-iceberg-lakehouse/
 │   ├── architecture.md
 │   ├── decisions.md
 │   ├── operations.md
-│   ├── quicksight_metrics.md
+│   ├── grafana_metrics.md
 │   └── simulator_design.md
 │
 ├── infra/
@@ -373,8 +373,7 @@ binance-iceberg-lakehouse/
 │   │   ├── 05_create_staging_orders.sql
 │   │   ├── 06_create_processed_orders.sql
 │   │   ├── 07_create_serving_tables.sql
-│   │   ├── 08_create_observability_tables.sql
-│   │   └── 09_quicksight_views.sql
+│   │   └── 08_create_observability_tables.sql
 │   │
 │   ├── streams/
 │   │   ├── stream_raw_trades.py
@@ -463,10 +462,10 @@ binance-iceberg-lakehouse/
 - Spark dependency preloading
 - DAG 실행 결과와 observability table 적재 확인
 
-### Phase 4. QuickSight Dashboard
+### Phase 4. Grafana Dashboard
 
 - Athena view 정리
-- QuickSight dataset 연결
+- Grafana Athena datasource 연결
 - Market / Order / Data Quality / Iceberg Operations dashboard 구성
 
 ---
@@ -478,5 +477,4 @@ binance-iceberg-lakehouse/
 - `docs/architecture.md` — 아키텍처와 책임 경계
 - `docs/operations.md` — 운영 지표, Airflow, maintenance 정책
 - `docs/simulator_design.md` — 주문 시뮬레이터 설계
-- `docs/quicksight_metrics.md` — Phase 4 QuickSight dashboard 지표 초안
-```
+- `docs/grafana_metrics.md` — Phase 4 Grafana dashboard 지표
