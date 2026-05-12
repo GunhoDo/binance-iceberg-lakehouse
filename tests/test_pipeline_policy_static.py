@@ -74,6 +74,9 @@ class DailyWindowPolicyTests(unittest.TestCase):
         self.assertIn(">= to_timestamp('{start_ts}')", source)
         self.assertIn("< to_timestamp('{end_ts}')", source)
         self.assertIn("window=[{args.start_ts}, {args.end_ts})", source)
+        self.assertIn("concat_ws(':', symbol, `interval`, cast(open_time AS string))", source)
+        self.assertIn("concat_ws(':', symbol, cast(summary_hour AS string))", source)
+        self.assertNotIn("concat(symbol, ':'", source)
 
     def test_data_quality_summary_schema_and_append_write_are_preserved(self) -> None:
         source = assert_valid_python(self, "src/jobs/daily/08_check_data_quality.py")
