@@ -29,19 +29,28 @@ def run() -> None:
         & (F.col("event_time") < F.to_timestamp(F.lit(args.end_ts)))
     )
 
+    ranked_windowed_df = windowed_df.withColumn(
+        "status_rank",
+        F.when(F.col("order_status") == "NEW", F.lit(1))
+        .when(F.col("order_status") == "PARTIALLY_FILLED", F.lit(2))
+        .when(F.col("order_status").isin("FILLED", "CANCELED"), F.lit(3))
+        .otherwise(F.lit(0)),
+    )
+
     latest_window = Window.partitionBy("order_id").orderBy(
         F.col("event_time").desc_nulls_last(),
+        F.col("status_rank").desc_nulls_last(),
         F.col("source_offset").desc_nulls_last(),
     )
 
     latest_event_df = (
-        windowed_df
+        ranked_windowed_df
         .withColumn("rn", F.row_number().over(latest_window))
         .where(F.col("rn") == 1)
-        .drop("rn")
+        .drop("rn", "status_rank")
     )
 
-    lifecycle_df = windowed_df.groupBy("order_id").agg(
+    lifecycle_df = ranked_windowed_df.groupBy("order_id").agg(
         F.min("event_time").alias("created_at"),
         F.max("event_time").alias("last_event_at"),
         F.max(F.when(F.col("order_status") == "FILLED", F.col("event_time"))).alias("filled_at"),
@@ -82,7 +91,7 @@ def run() -> None:
         USING tmp_processed_orders_source AS source
         ON target.order_id = source.order_id
 
-        WHEN MATCHED THEN UPDATE SET
+        WHEN MATCHED AND source.updated_at >= target.updated_at THEN UPDATE SET
             target.client_id = source.client_id,
             target.symbol = source.symbol,
             target.side = source.side,

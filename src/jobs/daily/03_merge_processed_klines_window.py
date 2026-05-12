@@ -30,7 +30,8 @@ def run() -> None:
 
     # 같은 kline key에 여러 update가 있으면 source_offset이 가장 큰 row를 최신으로 사용
     w = Window.partitionBy("symbol", "interval", "open_time").orderBy(
-        F.col("source_offset").desc_nulls_last()
+        F.col("source_offset").desc_nulls_last(),
+        F.col("updated_at").desc_nulls_last(),
     )
 
     latest_df = (
@@ -50,7 +51,7 @@ def run() -> None:
        AND target.interval = source.interval
        AND target.open_time = source.open_time
 
-    WHEN MATCHED THEN UPDATE SET
+    WHEN MATCHED AND source.source_offset >= target.source_offset THEN UPDATE SET
         target.close_time = source.close_time,
         target.open = source.open,
         target.high = source.high,
