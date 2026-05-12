@@ -138,8 +138,6 @@ services:
       context: ..
       dockerfile: infra/Dockerfile.spark
     container_name: spark-runner
-    env_file:
-      - ../.env
     environment:
       PYTHONPATH: /workspace
       PYSPARK_PYTHON: /usr/local/bin/python
