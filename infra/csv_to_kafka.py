@@ -6,12 +6,12 @@ PRD §6.1, §6.2 의 CSV 컬럼 구조를 기반으로 한다.
 
 사용법:
     # 단일 파일
-    python collectors/csv_to_kafka.py --topic trades --file data/raw/BTCUSDT-trades-2024-01.csv
+    python infra/csv_to_kafka.py --topic trades --file data/raw/BTCUSDT-trades-2024-01.csv
+    python infra/csv_to_kafka.py --topic klines --file data/raw/BTCUSDT-1m-2024-01.csv
 
     # 2024년 전체 (1~3월 자동 순회)
-    python collectors/csv_to_kafka.py --topic trades --symbol BTCUSDT --all-months
-    python collectors/csv_to_kafka.py --topic klines --symbol BTCUSDT --interval 1m --all-months
-
+    python infra/csv_to_kafka.py --topic trades --symbol BTCUSDT --all-months
+    python infra/csv_to_kafka.py --topic klines --symbol BTCUSDT --interval 1m --all-months
 의존성:
     pip install kafka-python
 """
@@ -57,7 +57,7 @@ KLINES_COLUMNS = [
     "ignore",
 ]
 
-MONTHS = [f"{m:02d}" for m in range(1, 4)]  # ["01", "02", "3"]
+MONTHS = [f"{m:02d}" for m in range(1, 4)]  # ["01", "02", "03"]
 
 
 def make_producer() -> KafkaProducer:
