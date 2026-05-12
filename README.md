@@ -254,6 +254,8 @@ Observability table은 append-only log table이므로 position delete rewrite �
 Docker Compose는 profile로 실행 범위를 나눕니다.
 
 ```bash
+sudo usermod -aG docker $USER
+newgrp docker
 # Kafka / Kafka UI / topic init
 docker compose -f infra/docker-compose.yml --profile streaming up -d
 
@@ -276,35 +278,54 @@ http://<EC2_PUBLIC_IP>:8081
 airflow / airflow
 ```
 
-Kafka UI:
+Grafana :
 
 ```text
-http://<EC2_PUBLIC_IP>:8090
+http://<EC2_PUBLIC_IP>:3000
 ```
 
-### 8.2 Spark job 수동 실행
+기본 로그인:
+
+```text
+admin / admin
+```
+### 8.2 Spark DDL 실행
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+docker exec -it spark-runner \
+  /workspace/orchestration/scripts/run_spark_sql.sh \
+  src/ddl/02_create_processed_trades.sql
+```
+
+### 8.3 Spark job 수동 실행
 
 Spark 관련 실행은 host가 아니라 `spark-runner` 컨테이너 안에서 실행합니다. `Dockerfile.spark`에서 Iceberg/Hadoop AWS dependency를 preloading하기 때문입니다.
 
 ```bash
+sudo usermod -aG docker $USER
+newgrp docker
 docker exec -it spark-runner \
   /workspace/orchestration/scripts/run_job.sh \
   src/jobs/daily/01_build_processed_trades_window.py \
-  2026-05-08T00:00:00 \
-  2026-05-09T00:00:00 \
+  2026-05-08T00:00:00Z \
+  2026-05-09T00:00:00Z \
   manual_test_1
 ```
 
-### 8.3 Spark SQL 실행
+### 8.4 Spark SQL 실행
 
 ```bash
+sudo usermod -aG docker $USER
+newgrp docker
 docker exec -it spark-runner \
   /workspace/orchestration/scripts/run_spark_sql.sh -e "
 SHOW TABLES IN glue.binance_lakehouse;
 "
 ```
 
-### 8.4 Observability 확인
+### 8.5 Observability 확인
 
 ```bash
 docker exec -it spark-runner \
@@ -312,26 +333,6 @@ docker exec -it spark-runner \
 SELECT *
 FROM glue.binance_lakehouse.pipeline_run_summary
 ORDER BY created_at DESC
-LIMIT 20;
-"
-```
-
-```bash
-docker exec -it spark-runner \
-  /workspace/orchestration/scripts/run_spark_sql.sh -e "
-SELECT *
-FROM glue.binance_lakehouse.data_quality_summary
-ORDER BY checked_at DESC
-LIMIT 20;
-"
-```
-
-```bash
-docker exec -it spark-runner \
-  /workspace/orchestration/scripts/run_spark_sql.sh -e "
-SELECT *
-FROM glue.binance_lakehouse.table_health_summary
-ORDER BY checked_at DESC
 LIMIT 20;
 "
 ```
@@ -434,39 +435,32 @@ binance-iceberg-lakehouse/
 
 ---
 
-## 10. Roadmap
+### 10. CSV → Kafka → S3 -> table -> airflow -> grafana 구조
 
-### Phase 1. Kafka + Raw Zone MVP
+실제 Raw Zone에 바로 CSV를 저장하는 것이 아니라, CSV 또는 simulator가 생성한 이벤트를 Kafka로 먼저 발행한다.  
+이후 Spark Structured Streaming Job이 Kafka topic을 구독하여 S3 Raw Zone에 Parquet 형식으로 적재한다.
 
-- trades collector 구현
-- klines collector 구현
-- orders simulator 구현
-- Kafka topic 생성
-- Spark Structured Streaming으로 Raw Zone 적재
-
-### Phase 2. Iceberg Core MVP
-
-- processed/staging/serving Iceberg table 구현
-- kline update MERGE 구현
-- order status MERGE 구현
-- Iceberg snapshot/files metadata 확인
-- MOR table 실험 및 compaction 실험
-
-### Phase 3. Observability + Airflow
-
-- Airflow Daily Pipeline DAG 구현
-- Maintenance DAG 구현
-- `data_quality_summary`, `pipeline_run_summary`, `table_health_summary` 생성
-- Airflow / Spark runner 분리
-- Docker Compose profile 분리
-- Spark dependency preloading
-- DAG 실행 결과와 observability table 적재 확인
-
-### Phase 4. Grafana Dashboard
-
-- Athena view 정리
-- Grafana Athena datasource 연결
-- Market / Order / Data Quality / Iceberg Operations dashboard 구성
+```text
+local CSV / simulator 
+        ↓
+infra/csv_to_kafka.py / src/simulators/orders_simulator.py
+        ↓
+Kafka producer
+        ↓
+Kafka topic (docker-compose auto generate)
+        ↓
+src/streams/stream_raw_*.py
+        ↓
+S3 Raw Zone
+        ↓
+src/ddl/00~08_*.sql
+        ↓
+connect airflow UI:8081
+        ↓
+run_dags
+        ↓
+connect grafana UI:3000           
+```
 
 ---
 
