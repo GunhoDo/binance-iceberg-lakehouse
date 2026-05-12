@@ -173,7 +173,9 @@ newgrp docker
 
 
 # -----------------------------------------------------------------------------
-# 9. AWS CLI configuration from .env
+# 9. AWS CLI configuration from .env 
+# change run_job && run_spark_sql
+# --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
 # -----------------------------------------------------------------------------
 echo "==> Configuring AWS CLI from .env"
 
