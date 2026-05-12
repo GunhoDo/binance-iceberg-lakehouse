@@ -16,7 +16,7 @@ Binance의 `trades`와 `klines`는 공개 시장 데이터로 수집하고, user
 - 주문 상태 변화(`NEW → PARTIALLY_FILLED → FILLED / CANCELED`)를 Iceberg MERGE로 관리한다.
 - kline/trade/order 기반 지표를 serving table로 사전 집계한다.
 - Iceberg metadata table을 이용해 파일 수, snapshot 수, compaction 필요 여부를 관찰한다.
-- Airflow와 QuickSight를 통해 파이프라인과 데이터 상태를 운영 지표로 확인한다.
+- Airflow와 Grafana를 통해 파이프라인과 데이터 상태를 운영 지표로 확인한다.
 - kline update는 `staging_klines`에서 key 단위 dedup 후 `processed_klines`에 MERGE한다.
 - order status event는 `staging_orders`에서 최신 상태를 선별한 뒤 `processed_orders`에 MERGE한다.
 - update가 발생할 수 있는 `processed_klines`, `processed_orders`는 확장성을 고려해 MOR(Merge-on-Read) 기반으로 설계한다.
@@ -86,8 +86,8 @@ Binance는 공개 market data stream으로 trade, aggregate trade, kline/candles
 
 - Airflow DAG로 Raw → Processed → Serving 흐름을 자동화한다.
 - Iceberg maintenance DAG를 분리해 compaction을 자동화한다.
-- QuickSight에서 market KPI, order KPI, pipeline/table health 지표를 시각화한다.
-- 데이터 규모가 커질 경우 S3 + Glue Catalog + Athena + QuickSight 구조로 확장한다.
+- Grafana에서 market KPI, order KPI, pipeline/table health 지표를 시각화한다.
+- 데이터 규모가 커질 경우 S3 + Glue Catalog + Athena + Grafana 구조로 확장한다.
 
 ---
 
@@ -233,7 +233,7 @@ data_quality_summary
 pipeline_run_summary
 table_health_summary
    ↓
-QuickSight
+Grafana
 ```
 `staging_klines`와 `staging_orders`는 serving 대상 테이블이 아니라, MERGE source를 안정화하기 위한 중간 테이블이다. Raw Zone은 append-only로 원본 이벤트를 보존하고, staging table은 raw JSON을 정제한 이벤트 로그를 보관한다. processed table은 MERGE를 통해 최신 상태를 관리한다.
 
@@ -782,9 +782,9 @@ Maintenance 전후의 table 상태는 `table_health_summary`에 append-only로 �
 
 ---
 
-## 15. QuickSight Plan
+## 15. Grafana Dashboard Plan
 
-Phase 4에서는 serving/monitoring tables를 QuickSight로 시각화한다.
+Phase 4에서는 serving/monitoring tables를 Grafana로 시각화한다.
 
 ### 15.1 Market Dashboard
 
@@ -866,7 +866,7 @@ Local Kafka + Local Spark + S3 + Glue Catalog
 → Docker Kafka/Spark Cluster
 → S3 + Glue Catalog
 → EMR / Glue Spark
-→ Athena + QuickSight
+→ Athena + Grafana
 ```
 
 Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성하고, Airflow task에서 호출할 수 있도록 구성한다. topic명, table명, 입력 경로, 출력 경로는 config로 분리한다.
@@ -933,7 +933,7 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - Data quality 결과를 `data_quality_summary`에 append-only로 기록
 - Iceberg table health 결과를 `table_health_summary`에 append-only로 기록
 
-### Phase 4. QuickSight Dashboard
+### Phase 4. Grafana Dashboard
 
 - Market metrics 시각화
 - Order execution metrics 시각화
@@ -974,7 +974,7 @@ Scale-out을 고려하여 Spark job은 독립 실행 가능한 단위로 작성�
 - Data quality summary를 생성할 수 있다.
 - Pipeline run summary를 생성할 수 있다.
 - Table health summary를 생성할 수 있다.
-- QuickSight에서 market, order, data quality, operation 지표를 확인할 수 있다.
+- Grafana에서 market, order, data quality, operation 지표를 확인할 수 있다.
 
 Phase 3는 다음 조건을 만족하면 완료로 본다.
 
