@@ -53,9 +53,11 @@ spark-submit \
   --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.InstanceProfileCredentialsProvider" \
   --conf "spark.sql.parquet.enableVectorizedReader=false" \
   --conf "spark.sql.iceberg.vectorization.enabled=false" \
-  --conf "spark.sql.shuffle.partitions=4" \
-  --conf "spark.default.parallelism=4" \
+  --conf "spark.sql.shuffle.partitions=2" \
+  --conf "spark.default.parallelism=2" \
   --conf "spark.driver.memory=2g" \
+  --conf "spark.executor.memory=2g" \
+  --conf "spark.driver.maxResultSize=512m" \
   "$JOB_PATH" \
   --start-ts "$START_TS" \
   --end-ts "$END_TS" \
