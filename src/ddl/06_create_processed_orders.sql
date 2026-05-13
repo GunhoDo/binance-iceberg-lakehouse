@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.processed_orders (
     simulated_parameters  STRING,
     source_topic          STRING,
     source_partition      INT,
-    source_offset         BIGINT
+    source_offset         BIGINT,
+    ingest_time           STRING
 )
 USING iceberg
 PARTITIONED BY (days(updated_at))

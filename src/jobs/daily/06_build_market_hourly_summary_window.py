@@ -1,10 +1,9 @@
 """06_build_market_hourly_summary_window.py
 
-processed_klines + processed_trades -> market_hourly_summary window 기반 MERGE job.
+processed_klines + processed_trades -> market_hourly_summary MERGE job.
 
-멱등성 기준:
-- (summary_hour, symbol) 기준 MERGE
-- source view 컬럼 순서를 target table과 맞춘 뒤 INSERT * 사용
+Affected summary keys are selected by ingest_time. The summary hour itself stays
+on business time: kline open_time and trade_time.
 """
 
 from __future__ import annotations
@@ -24,44 +23,67 @@ def run() -> None:
 
     spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW market_hourly_summary_source AS
-        WITH kline_hourly AS (
-            SELECT
+        WITH affected_summary_keys AS (
+            SELECT DISTINCT
                 date_trunc('hour', open_time) AS summary_hour,
-                symbol,
-
-                first(open, true) AS open_price,
-                max(high) AS high_price,
-                min(low) AS low_price,
-                last(close, true) AS close_price,
-
-                CAST(sum(volume) AS DECIMAL(30, 8)) AS kline_volume,
-                CAST(sum(quote_volume) AS DECIMAL(30, 8)) AS kline_quote_volume,
-                CAST(sum(number_of_trades) AS BIGINT) AS kline_number_of_trades
+                symbol
             FROM {PROCESSED_KLINES}
-            WHERE open_time >= TIMESTAMP '{args.start_ts}'
-              AND open_time < TIMESTAMP '{args.end_ts}'
-            GROUP BY date_trunc('hour', open_time), symbol
+            WHERE to_timestamp(ingest_time) >= TIMESTAMP '{args.start_ts}'
+              AND to_timestamp(ingest_time) < TIMESTAMP '{args.end_ts}'
+              AND open_time IS NOT NULL
+              AND symbol IS NOT NULL
+
+            UNION
+
+            SELECT DISTINCT
+                date_trunc('hour', trade_time) AS summary_hour,
+                symbol
+            FROM {PROCESSED_TRADES}
+            WHERE to_timestamp(ingest_time) >= TIMESTAMP '{args.start_ts}'
+              AND to_timestamp(ingest_time) < TIMESTAMP '{args.end_ts}'
+              AND trade_time IS NOT NULL
+              AND symbol IS NOT NULL
+        ),
+        kline_hourly AS (
+            SELECT
+                keys.summary_hour,
+                keys.symbol,
+
+                first(k.open, true) AS open_price,
+                max(k.high) AS high_price,
+                min(k.low) AS low_price,
+                last(k.close, true) AS close_price,
+
+                CAST(sum(k.volume) AS DECIMAL(30, 8)) AS kline_volume,
+                CAST(sum(k.quote_volume) AS DECIMAL(30, 8)) AS kline_quote_volume,
+                CAST(sum(k.number_of_trades) AS BIGINT) AS kline_number_of_trades
+            FROM affected_summary_keys keys
+            JOIN {PROCESSED_KLINES} k
+              ON date_trunc('hour', k.open_time) = keys.summary_hour
+             AND k.symbol = keys.symbol
+            GROUP BY keys.summary_hour, keys.symbol
         ),
         trade_hourly AS (
             SELECT
-                date_trunc('hour', trade_time) AS summary_hour,
-                symbol,
+                keys.summary_hour,
+                keys.symbol,
 
                 CAST(count(*) AS BIGINT) AS trade_count,
-                CAST(sum(qty) AS DECIMAL(30, 8)) AS trade_qty,
-                CAST(sum(quote_qty) AS DECIMAL(30, 8)) AS trade_quote_qty,
-                CAST(avg(price) AS DECIMAL(20, 8)) AS avg_trade_price,
+                CAST(sum(t.qty) AS DECIMAL(30, 8)) AS trade_qty,
+                CAST(sum(t.quote_qty) AS DECIMAL(30, 8)) AS trade_quote_qty,
+                CAST(avg(t.price) AS DECIMAL(20, 8)) AS avg_trade_price,
 
-                CAST(sum(CASE WHEN is_buyer_maker = true THEN 1 ELSE 0 END) AS BIGINT) AS maker_trade_count,
-                CAST(sum(CASE WHEN is_buyer_maker = false THEN 1 ELSE 0 END) AS BIGINT) AS taker_trade_count
-            FROM {PROCESSED_TRADES}
-            WHERE trade_time >= TIMESTAMP '{args.start_ts}'
-              AND trade_time < TIMESTAMP '{args.end_ts}'
-            GROUP BY date_trunc('hour', trade_time), symbol
+                CAST(sum(CASE WHEN t.is_buyer_maker = true THEN 1 ELSE 0 END) AS BIGINT) AS maker_trade_count,
+                CAST(sum(CASE WHEN t.is_buyer_maker = false THEN 1 ELSE 0 END) AS BIGINT) AS taker_trade_count
+            FROM affected_summary_keys keys
+            JOIN {PROCESSED_TRADES} t
+              ON date_trunc('hour', t.trade_time) = keys.summary_hour
+             AND t.symbol = keys.symbol
+            GROUP BY keys.summary_hour, keys.symbol
         )
         SELECT
-            COALESCE(k.summary_hour, t.summary_hour) AS summary_hour,
-            COALESCE(k.symbol, t.symbol) AS symbol,
+            keys.summary_hour AS summary_hour,
+            keys.symbol AS symbol,
 
             k.open_price AS open_price,
             k.high_price AS high_price,
@@ -80,10 +102,13 @@ def run() -> None:
             t.taker_trade_count AS taker_trade_count,
 
             current_timestamp() AS updated_at
-        FROM kline_hourly k
-        FULL OUTER JOIN trade_hourly t
-          ON k.summary_hour = t.summary_hour
-         AND k.symbol = t.symbol
+        FROM affected_summary_keys keys
+        LEFT JOIN kline_hourly k
+          ON k.summary_hour = keys.summary_hour
+         AND k.symbol = keys.symbol
+        LEFT JOIN trade_hourly t
+          ON t.summary_hour = keys.summary_hour
+         AND t.symbol = keys.symbol
     """)
 
     spark.sql(f"""

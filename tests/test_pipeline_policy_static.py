@@ -48,7 +48,7 @@ class DailyWindowPolicyTests(unittest.TestCase):
         for path in [
             "src/jobs/daily/01_build_processed_trades_window.py",
             "src/jobs/daily/02_build_staging_klines_window.py",
-            "src/jobs/daily/04_build_staging_orders_window.py",
+            "src/jobs/daily/03_build_staging_orders_window.py",
         ]:
             with self.subTest(path=path):
                 source = assert_valid_python(self, path)
@@ -57,6 +57,45 @@ class DailyWindowPolicyTests(unittest.TestCase):
                 self.assertIn('F.col("ingest_date") <= end_date', source)
                 self.assertIn('F.col("ingest_ts") >= F.to_timestamp(F.lit(args.start_ts))', source)
                 self.assertIn('F.col("ingest_ts") < F.to_timestamp(F.lit(args.end_ts))', source)
+
+    def test_merge_jobs_select_affected_rows_by_ingest_time(self) -> None:
+        expectations = {
+            "src/jobs/daily/04_merge_processed_klines_window.py": [
+                'affected_keys_df = (',
+                'F.to_timestamp(F.col("ingest_time"))',
+                '.select("symbol", "interval", "open_time")',
+                'on=["symbol", "interval", "open_time"]',
+            ],
+            "src/jobs/daily/05_merge_processed_orders_window.py": [
+                'affected_order_ids_df = (',
+                'F.to_timestamp(F.col("ingest_time"))',
+                '.select("order_id")',
+                'on="order_id"',
+            ],
+        }
+
+        for path, snippets in expectations.items():
+            with self.subTest(path=path):
+                source = assert_valid_python(self, path)
+                self.assertIn('F.col("ingest_ts") >= F.to_timestamp(F.lit(args.start_ts))', source)
+                self.assertIn('F.col("ingest_ts") < F.to_timestamp(F.lit(args.end_ts))', source)
+                for snippet in snippets:
+                    self.assertIn(snippet, source)
+
+    def test_gold_jobs_select_affected_keys_by_ingest_but_group_by_business_time(self) -> None:
+        market_source = assert_valid_python(self, "src/jobs/daily/06_build_market_hourly_summary_window.py")
+        self.assertIn("WITH affected_summary_keys AS", market_source)
+        self.assertIn("to_timestamp(ingest_time) >= TIMESTAMP '{args.start_ts}'", market_source)
+        self.assertIn("date_trunc('hour', open_time) AS summary_hour", market_source)
+        self.assertIn("date_trunc('hour', trade_time) AS summary_hour", market_source)
+        self.assertIn("date_trunc('hour', k.open_time) = keys.summary_hour", market_source)
+        self.assertIn("date_trunc('hour', t.trade_time) = keys.summary_hour", market_source)
+
+        order_source = assert_valid_python(self, "src/jobs/daily/07_build_order_execution_summary_window.py")
+        self.assertIn("WITH affected_summary_keys AS", order_source)
+        self.assertIn("to_timestamp(ingest_time) >= TIMESTAMP '{args.start_ts}'", order_source)
+        self.assertIn("date_trunc('hour', created_at) AS summary_hour", order_source)
+        self.assertIn("date_trunc('hour', p.created_at) = keys.summary_hour", order_source)
 
     def test_data_quality_job_uses_windowed_queries(self) -> None:
         source = assert_valid_python(self, "src/jobs/daily/08_check_data_quality.py")
@@ -109,7 +148,7 @@ class IdempotencyAndMergePolicyTests(unittest.TestCase):
     def test_staging_jobs_are_idempotent_by_kafka_offset(self) -> None:
         for path in [
             "src/jobs/daily/02_build_staging_klines_window.py",
-            "src/jobs/daily/04_build_staging_orders_window.py",
+            "src/jobs/daily/03_build_staging_orders_window.py",
         ]:
             with self.subTest(path=path):
                 source = assert_valid_python(self, path)
@@ -120,7 +159,7 @@ class IdempotencyAndMergePolicyTests(unittest.TestCase):
                 self.assertIn("WHEN NOT MATCHED THEN INSERT *", source)
 
     def test_kline_merge_does_not_overwrite_newer_offset_with_late_event(self) -> None:
-        source = assert_valid_python(self, "src/jobs/daily/03_merge_processed_klines_window.py")
+        source = assert_valid_python(self, "src/jobs/daily/04_merge_processed_klines_window.py")
 
         self.assertIn(
             "WHEN MATCHED AND source.source_offset >= target.source_offset THEN UPDATE SET",
@@ -128,7 +167,7 @@ class IdempotencyAndMergePolicyTests(unittest.TestCase):
         )
 
     def test_kline_dedup_uses_source_offset_then_updated_at(self) -> None:
-        source = assert_valid_python(self, "src/jobs/daily/03_merge_processed_klines_window.py")
+        source = assert_valid_python(self, "src/jobs/daily/04_merge_processed_klines_window.py")
 
         self.assertRegex(
             source,
@@ -167,6 +206,28 @@ class IdempotencyAndMergePolicyTests(unittest.TestCase):
             "WHEN MATCHED AND source.updated_at >= target.updated_at THEN UPDATE SET",
             source,
         )
+
+    def test_ingest_time_is_preserved_in_processed_tables(self) -> None:
+        kline_source = assert_valid_python(self, "src/jobs/daily/04_merge_processed_klines_window.py")
+        order_source = assert_valid_python(self, "src/jobs/daily/05_merge_processed_orders_window.py")
+
+        self.assertIn("target.ingest_time = source.ingest_time", kline_source)
+        self.assertIn("source.ingest_time", kline_source)
+        self.assertIn("target.ingest_time = source.ingest_time", order_source)
+        self.assertIn('F.max("ingest_time").alias("ingest_time")', order_source)
+        self.assertIn('F.col("life.ingest_time").alias("ingest_time")', order_source)
+
+
+class DdlPolicyTests(unittest.TestCase):
+    def test_ingest_time_columns_exist_for_incremental_downstream_processing(self) -> None:
+        for path in [
+            "src/ddl/03_create_processed_klines.sql",
+            "src/ddl/04_create_staging_klines.sql",
+            "src/ddl/06_create_processed_orders.sql",
+        ]:
+            with self.subTest(path=path):
+                source = read(path)
+                self.assertIn("ingest_time", source)
 
 
 class ObservabilityAndMaintenancePolicyTests(unittest.TestCase):

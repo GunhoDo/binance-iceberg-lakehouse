@@ -1,10 +1,10 @@
-"""03_merge_processed_klines_window.py
+"""04_merge_processed_klines_window.py
 
-staging_klines -> processed_klines window 기반 MERGE job.
+staging_klines -> processed_klines ingest-window based MERGE job.
 
-멱등성 기준:
-- processed_klines는 (symbol, interval, open_time) 기준 최신 상태만 유지
-- 같은 window를 다시 실행해도 같은 key는 UPDATE만 수행
+The Airflow window means "data ingested in this interval". The processed
+business key remains (symbol, interval, open_time), so late/backfilled klines
+update the hour they belong to instead of the hour they arrived.
 """
 
 from __future__ import annotations
@@ -23,19 +23,37 @@ def run() -> None:
 
     staging_df = spark.table(STAGING_KLINES)
 
-    windowed_df = staging_df.where(
-        (F.col("open_time") >= F.to_timestamp(F.lit(args.start_ts)))
-        & (F.col("open_time") < F.to_timestamp(F.lit(args.end_ts)))
+    staging_with_ingest_df = staging_df.withColumn(
+        "ingest_ts",
+        F.to_timestamp(F.col("ingest_time")),
     )
 
-    # 같은 kline key에 여러 update가 있으면 source_offset이 가장 큰 row를 최신으로 사용
+    affected_keys_df = (
+        staging_with_ingest_df
+        .where(
+            (F.col("ingest_ts") >= F.to_timestamp(F.lit(args.start_ts)))
+            & (F.col("ingest_ts") < F.to_timestamp(F.lit(args.end_ts)))
+            & F.col("symbol").isNotNull()
+            & F.col("interval").isNotNull()
+            & F.col("open_time").isNotNull()
+        )
+        .select("symbol", "interval", "open_time")
+        .distinct()
+    )
+
+    impacted_df = staging_df.alias("staging").join(
+        affected_keys_df.alias("keys"),
+        on=["symbol", "interval", "open_time"],
+        how="inner",
+    )
+
     w = Window.partitionBy("symbol", "interval", "open_time").orderBy(
         F.col("source_offset").desc_nulls_last(),
         F.col("updated_at").desc_nulls_last(),
     )
 
     latest_df = (
-        windowed_df
+        impacted_df
         .withColumn("rn", F.row_number().over(w))
         .where(F.col("rn") == 1)
         .drop("rn")
@@ -64,6 +82,7 @@ def run() -> None:
         target.source_topic = source.source_topic,
         target.source_partition = source.source_partition,
         target.source_offset = source.source_offset,
+        target.ingest_time = source.ingest_time,
         target.updated_at = source.updated_at
 
     WHEN NOT MATCHED THEN INSERT (
@@ -82,6 +101,7 @@ def run() -> None:
         source_topic,
         source_partition,
         source_offset,
+        ingest_time,
         updated_at
     )
     VALUES (
@@ -100,16 +120,21 @@ def run() -> None:
         source.source_topic,
         source.source_partition,
         source.source_offset,
+        source.ingest_time,
         source.updated_at
     )
     """)
 
+    affected_key_count = affected_keys_df.count()
     source_count = latest_df.count()
     target_total = spark.sql(f"SELECT COUNT(*) AS cnt FROM {PROCESSED_KLINES}").collect()[0]["cnt"]
 
     print(
         "[phase3_merge_processed_klines_window] complete "
-        f"run_id={args.run_id}, source_rows={source_count}, target_total_rows={target_total}"
+        f"run_id={args.run_id}, "
+        f"affected_keys={affected_key_count}, "
+        f"source_rows={source_count}, "
+        f"target_total_rows={target_total}"
     )
 
     spark.stop()

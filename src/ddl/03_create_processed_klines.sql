@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.processed_klines (
     source_topic      STRING,
     source_partition  INT,
     source_offset     BIGINT,
+    ingest_time       STRING,
     updated_at        TIMESTAMP
 )
 USING iceberg

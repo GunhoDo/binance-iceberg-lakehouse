@@ -1,11 +1,10 @@
 """05_merge_processed_orders_window.py
 
-staging_orders -> processed_orders window 기반 MERGE job.
+staging_orders -> processed_orders ingest-window based MERGE job.
 
-멱등성 기준:
-- processed_orders는 order_id 기준 최신 상태만 유지
-- 같은 window 재실행 시 같은 order_id는 UPDATE만 수행
-- source_df 컬럼을 target schema와 맞춘 뒤 INSERT * 사용
+The Airflow window means "data ingested in this interval". For affected order
+ids, lifecycle fields are rebuilt from all staging history so late status events
+update the current-state order row correctly.
 """
 
 from __future__ import annotations
@@ -24,12 +23,29 @@ def run() -> None:
 
     staging_df = spark.table(STAGING_ORDERS)
 
-    windowed_df = staging_df.where(
-        (F.col("event_time") >= F.to_timestamp(F.lit(args.start_ts)))
-        & (F.col("event_time") < F.to_timestamp(F.lit(args.end_ts)))
+    staging_with_ingest_df = staging_df.withColumn(
+        "ingest_ts",
+        F.to_timestamp(F.col("ingest_time")),
     )
 
-    ranked_windowed_df = windowed_df.withColumn(
+    affected_order_ids_df = (
+        staging_with_ingest_df
+        .where(
+            (F.col("ingest_ts") >= F.to_timestamp(F.lit(args.start_ts)))
+            & (F.col("ingest_ts") < F.to_timestamp(F.lit(args.end_ts)))
+            & F.col("order_id").isNotNull()
+        )
+        .select("order_id")
+        .distinct()
+    )
+
+    impacted_df = staging_df.alias("staging").join(
+        affected_order_ids_df.alias("affected"),
+        on="order_id",
+        how="inner",
+    )
+
+    ranked_impacted_df = impacted_df.withColumn(
         "status_rank",
         F.when(F.col("order_status") == "NEW", F.lit(1))
         .when(F.col("order_status") == "PARTIALLY_FILLED", F.lit(2))
@@ -44,20 +60,20 @@ def run() -> None:
     )
 
     latest_event_df = (
-        ranked_windowed_df
+        ranked_impacted_df
         .withColumn("rn", F.row_number().over(latest_window))
         .where(F.col("rn") == 1)
         .drop("rn", "status_rank")
     )
 
-    lifecycle_df = ranked_windowed_df.groupBy("order_id").agg(
+    lifecycle_df = ranked_impacted_df.groupBy("order_id").agg(
         F.min("event_time").alias("created_at"),
         F.max("event_time").alias("last_event_at"),
         F.max(F.when(F.col("order_status") == "FILLED", F.col("event_time"))).alias("filled_at"),
         F.max(F.when(F.col("order_status") == "CANCELED", F.col("event_time"))).alias("canceled_at"),
+        F.max("ingest_time").alias("ingest_time"),
     )
 
-    # processed_orders target schema와 컬럼명/순서를 맞춤
     source_df = (
         latest_event_df.alias("latest")
         .join(lifecycle_df.alias("life"), on="order_id", how="left")
@@ -81,6 +97,7 @@ def run() -> None:
             F.col("latest.source_topic").alias("source_topic"),
             F.col("latest.source_partition").alias("source_partition"),
             F.col("latest.source_offset").alias("source_offset"),
+            F.col("life.ingest_time").alias("ingest_time"),
         )
     )
 
@@ -109,11 +126,13 @@ def run() -> None:
             target.simulated_parameters = source.simulated_parameters,
             target.source_topic = source.source_topic,
             target.source_partition = source.source_partition,
-            target.source_offset = source.source_offset
+            target.source_offset = source.source_offset,
+            target.ingest_time = source.ingest_time
 
         WHEN NOT MATCHED THEN INSERT *
     """)
 
+    affected_order_count = affected_order_ids_df.count()
     source_count = source_df.count()
     target_total = spark.sql(
         f"SELECT COUNT(*) AS cnt FROM {PROCESSED_ORDERS}"
@@ -122,6 +141,7 @@ def run() -> None:
     print(
         "[phase3_merge_processed_orders_window] complete "
         f"run_id={args.run_id}, "
+        f"affected_orders={affected_order_count}, "
         f"source_rows={source_count}, "
         f"target_total_rows={target_total}"
     )
