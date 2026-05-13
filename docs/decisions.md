@@ -297,6 +297,9 @@ trades는 체결 확정 이벤트라 한 번 발생하면 수정되지 않는다
 따라서 trade_id 기준 중복 제거 후 append만 하면 충분하다.
 MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
 
+더 이상 Iceberg의 `MERGE INTO`를 사용하지 않고, 현재 배치에서 `trade_id`를 기준으로 중복을 제거하고, 기존 `processed_trades.trade_id`와 왼쪽 역조인(left-anti join)을 수행한 후, 새 행만 추가합니다.
+이를 통해 재시도/백필의 멱등성을 유지하면서 MERGE 계획 비용, 윈도우 정렬 중복 제거 비용, 그리고 전체 대상 `COUNT(*)` 로깅을 방지할 수 있습니다.
+
 ## D13. Kline `is_closed` 처리
 
 현재 `raw_klines`는 historical kline 기반이며, `message_value`에 WebSocket close flag(`x`)가 없다.

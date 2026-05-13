@@ -137,13 +137,16 @@ class DailyWindowPolicyTests(unittest.TestCase):
 
 
 class IdempotencyAndMergePolicyTests(unittest.TestCase):
-    def test_processed_trades_is_idempotent_by_trade_id_insert_only_merge(self) -> None:
+    def test_processed_trades_is_idempotent_by_trade_id_append_only(self) -> None:
         source = assert_valid_python(self, "src/jobs/daily/01_build_processed_trades_window.py")
 
-        self.assertIn('Window.partitionBy("trade_id")', source)
-        self.assertIn("ON target.trade_id = source.trade_id", source)
-        self.assertIn("WHEN NOT MATCHED THEN INSERT *", source)
-        self.assertNotIn("WHEN MATCHED THEN UPDATE", source)
+        self.assertIn('dropDuplicates(["trade_id"])', source)
+        self.assertIn('spark.table(PROCESSED_TRADES).select("trade_id")', source)
+        self.assertIn('how="left_anti"', source)
+        self.assertIn('.writeTo(PROCESSED_TRADES).append()', source)
+        self.assertNotIn("MERGE INTO", source)
+        self.assertNotIn("Window.partitionBy", source)
+        self.assertNotIn(f"SELECT COUNT(*) AS cnt FROM {{PROCESSED_TRADES}}", source)
 
     def test_staging_jobs_are_idempotent_by_kafka_offset(self) -> None:
         for path in [
@@ -229,6 +232,66 @@ class DdlPolicyTests(unittest.TestCase):
                 source = read(path)
                 self.assertIn("ingest_time", source)
 
+
+class TableHealthPolicyTests(unittest.TestCase):
+    def test_table_health_defaults_to_lightweight_core_tables(self) -> None:
+        source = assert_valid_python(self, "src/jobs/daily/09_check_table_health.py")
+
+        self.assertIn('os.environ.get("TABLE_HEALTH_MODE", "lightweight")', source)
+        self.assertIn("CORE_TABLES = [", source)
+        self.assertIn("OBSERVABILITY_TABLES = [", source)
+        self.assertIn('if mode == "full":', source)
+        self.assertIn("return CORE_TABLES", source)
+
+        core_section = source.split("CORE_TABLES = [", 1)[1].split("]", 1)[0]
+        for table in [
+            "processed_trades",
+            "processed_klines",
+            "processed_orders",
+            "market_hourly_summary",
+            "order_execution_summary",
+        ]:
+            self.assertIn(table, core_section)
+
+        for table in [
+            "data_quality_summary",
+            "pipeline_run_summary",
+            "table_health_summary",
+        ]:
+            self.assertNotIn(table, core_section)
+
+    def test_table_health_full_mode_includes_observability_tables(self) -> None:
+        source = assert_valid_python(self, "src/jobs/daily/09_check_table_health.py")
+
+        self.assertIn("return CORE_TABLES + OBSERVABILITY_TABLES", source)
+        observability_section = source.split("OBSERVABILITY_TABLES = [", 1)[1].split("]", 1)[0]
+        for table in [
+            "data_quality_summary",
+            "pipeline_run_summary",
+            "table_health_summary",
+        ]:
+            self.assertIn(table, observability_section)
+
+    def test_table_health_combines_snapshot_metadata_query(self) -> None:
+        source = assert_valid_python(self, "src/jobs/daily/09_check_table_health.py")
+
+        self.assertIn("COUNT(*) AS snapshot_count", source)
+        self.assertIn("MAX(committed_at) AS last_committed_at", source)
+        self.assertEqual(source.count("FROM {full_table}.snapshots"), 1)
+        self.assertIn("[table_health] snapshots query start", source)
+        self.assertIn("[table_health] snapshots query done", source)
+
+    def test_maintenance_dag_runs_table_health_in_full_mode(self) -> None:
+        source = assert_valid_python(self, "orchestration/dags/iceberg_maintenance.py")
+
+        self.assertIn("-e TABLE_HEALTH_MODE={table_health_mode}", source)
+        self.assertEqual(source.count('table_health_mode="full"'), 2)
+
+    def test_run_spark_sql_defaults_match_small_ec2_settings(self) -> None:
+        source = read("orchestration/scripts/run_spark_sql.sh")
+
+        self.assertIn('SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-2g}"', source)
+        self.assertIn('SPARK_SHUFFLE_PARTITIONS="${SPARK_SHUFFLE_PARTITIONS:-2}"', source)
 
 class ObservabilityAndMaintenancePolicyTests(unittest.TestCase):
     def test_observability_append_only_and_maintenance_mor_policies_are_preserved(self) -> None:
