@@ -147,6 +147,9 @@ class IdempotencyAndMergePolicyTests(unittest.TestCase):
         self.assertNotIn("MERGE INTO", source)
         self.assertNotIn("Window.partitionBy", source)
         self.assertNotIn(f"SELECT COUNT(*) AS cnt FROM {{PROCESSED_TRADES}}", source)
+        self.assertNotIn(".cache()", source)
+        self.assertNotIn(".count()", source)
+        self.assertNotIn(".unpersist()", source)
 
     def test_staging_jobs_are_idempotent_by_kafka_offset(self) -> None:
         for path in [
