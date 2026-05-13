@@ -84,34 +84,23 @@ def run() -> None:
         & F.col("trade_time").isNotNull()
     )
 
-    deduped_df = processed_df.dropDuplicates(["trade_id"]).cache()
-    batch_count = deduped_df.count()
+    deduped_df = processed_df.dropDuplicates(["trade_id"])
 
     existing_trade_ids_df = spark.table(PROCESSED_TRADES).select("trade_id")
     new_trades_df = deduped_df.join(
         existing_trade_ids_df,
         on="trade_id",
         how="left_anti",
-    ).cache()
-    new_count = new_trades_df.count()
+    )
 
     new_trades_df.writeTo(PROCESSED_TRADES).append()
-
-    raw_count = windowed_raw_df.count()
-
-    new_trades_df.unpersist()
-    deduped_df.unpersist()
 
     print(
         "[phase3_build_processed_trades_window] complete "
         f"run_id={args.run_id}, "
         f"start_ts={args.start_ts}, "
-        f"end_ts={args.end_ts}, "
-        f"raw_window_rows={raw_count}, "
-        f"deduped_batch_rows={batch_count}, "
-        f"new_rows={new_count}"
+        f"end_ts={args.end_ts}"
     )
-
     spark.stop()
 
 
