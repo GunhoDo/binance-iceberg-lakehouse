@@ -1,24 +1,14 @@
 """09_check_table_health.py
 
-Phase3 Iceberg table health check job.
+Iceberg table health check job.
 
-수집 항목:
-- data file count
-- position delete file count
-- equality delete file count
-- delete/data file ratio
-- avg file size
-- total file size
-- record count
-- manifest count
-- snapshot count
-- last committed timestamp
-
-결과:
-- glue.binance_lakehouse.table_health_summary append
+Default mode is lightweight for daily pipeline runs. Set TABLE_HEALTH_MODE=full
+for maintenance before/after checks that should include observability tables.
 """
 
 from __future__ import annotations
+
+import os
 
 from pyspark.sql import Row
 from pyspark.sql import functions as F
@@ -35,12 +25,15 @@ from src.jobs.common.spark_session import get_spark
 from src.jobs.common.tables import TABLE_HEALTH_SUMMARY
 
 
-TABLES = [
+CORE_TABLES = [
     ("processed_trades", "COW_APPEND"),
     ("processed_klines", "MOR"),
     ("processed_orders", "MOR"),
     ("market_hourly_summary", "MOR"),
     ("order_execution_summary", "MOR"),
+]
+
+OBSERVABILITY_TABLES = [
     ("data_quality_summary", "APPEND_ONLY"),
     ("pipeline_run_summary", "APPEND_ONLY"),
     ("table_health_summary", "APPEND_ONLY"),
@@ -66,6 +59,17 @@ RESULT_SCHEMA = StructType([
     StructField("last_committed_at", TimestampType(), True),
 ])
 
+
+def table_health_mode() -> str:
+    return os.environ.get("TABLE_HEALTH_MODE", "lightweight").strip().lower()
+
+
+def tables_for_mode(mode: str) -> list[tuple[str, str]]:
+    if mode == "full":
+        return CORE_TABLES + OBSERVABILITY_TABLES
+    return CORE_TABLES
+
+
 def scalar_or_none(spark, query: str):
     rows = spark.sql(query).collect()
     if not rows:
@@ -76,6 +80,7 @@ def scalar_or_none(spark, query: str):
 def collect_table_health(spark, run_id: str, table_name: str, table_mode: str) -> Row:
     full_table = f"glue.binance_lakehouse.{table_name}"
 
+    print(f"[table_health] files query start: {table_name}", flush=True)
     file_stats = spark.sql(f"""
         SELECT
             SUM(CASE WHEN content = 0 THEN 1 ELSE 0 END) AS data_file_count,
@@ -86,6 +91,7 @@ def collect_table_health(spark, run_id: str, table_name: str, table_mode: str) -
             SUM(CASE WHEN content = 0 THEN record_count ELSE 0 END) AS record_count
         FROM {full_table}.files
     """).collect()[0]
+    print(f"[table_health] files query done: {table_name}", flush=True)
 
     data_file_count = int(file_stats["data_file_count"] or 0)
     position_delete_file_count = int(file_stats["position_delete_file_count"] or 0)
@@ -112,22 +118,24 @@ def collect_table_health(spark, run_id: str, table_name: str, table_mode: str) -
 
     record_count = int(file_stats["record_count"] or 0)
 
+    print(f"[table_health] manifests query start: {table_name}", flush=True)
     manifest_count = scalar_or_none(
         spark,
         f"SELECT COUNT(*) FROM {full_table}.manifests",
     )
     manifest_count = int(manifest_count or 0)
+    print(f"[table_health] manifests query done: {table_name}", flush=True)
 
-    snapshot_count = scalar_or_none(
-        spark,
-        f"SELECT COUNT(*) FROM {full_table}.snapshots",
-    )
-    snapshot_count = int(snapshot_count or 0)
-
-    last_committed_at = scalar_or_none(
-        spark,
-        f"SELECT MAX(committed_at) FROM {full_table}.snapshots",
-    )
+    print(f"[table_health] snapshots query start: {table_name}", flush=True)
+    snapshot_stats = spark.sql(f"""
+        SELECT
+            COUNT(*) AS snapshot_count,
+            MAX(committed_at) AS last_committed_at
+        FROM {full_table}.snapshots
+    """).collect()[0]
+    snapshot_count = int(snapshot_stats["snapshot_count"] or 0)
+    last_committed_at = snapshot_stats["last_committed_at"]
+    print(f"[table_health] snapshots query done: {table_name}", flush=True)
 
     return Row(
         run_id=run_id,
@@ -151,10 +159,15 @@ def run() -> None:
     args = parse_job_args()
     spark = get_spark("phase3_check_table_health")
 
+    mode = table_health_mode()
+    tables = tables_for_mode(mode)
+    print(f"[table_health] mode={mode}, tables={len(tables)}", flush=True)
+
     results: list[Row] = []
 
-    for table_name, table_mode in TABLES:
+    for table_name, table_mode in tables:
         try:
+            print(f"[table_health] collect start: {table_name}", flush=True)
             results.append(
                 collect_table_health(
                     spark=spark,
@@ -163,11 +176,9 @@ def run() -> None:
                     table_mode=table_mode,
                 )
             )
-            print(f"[table_health] collected: {table_name}")
+            print(f"[table_health] collected: {table_name}", flush=True)
         except Exception as e:
-            # MVP에서는 한 테이블 실패가 전체 health check를 죽이지 않도록 한다.
-            # 실패 테이블은 로그로 남기고 다음 table로 진행한다.
-            print(f"[table_health] skip {table_name}: {e}")
+            print(f"[table_health] skip {table_name}: {e}", flush=True)
 
     if not results:
         print("[phase3_check_table_health] no results")
@@ -200,7 +211,7 @@ def run() -> None:
 
     print(
         "[phase3_check_table_health] complete "
-        f"run_id={args.run_id}, tables={len(results)}"
+        f"run_id={args.run_id}, mode={mode}, tables={len(results)}"
     )
 
     spark.stop()
