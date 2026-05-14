@@ -10,7 +10,7 @@ PRD §10.2, §14.1 참조.
 실행:
     PYTHONPATH=. spark-submit \
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \
-      src/pipelines/stream_raw_orders.py
+      src/streams/stream_raw_orders.py
 """
 
 from __future__ import annotations
@@ -44,8 +44,7 @@ def run() -> None:
         F.col("key").cast("string").alias("message_key"),
         F.col("value").cast("string").alias("message_value"),
         F.current_timestamp().cast("string").alias("ingest_time"),
-        F.date_format(F.current_timestamp(), "yyyy").alias("year"),
-        F.date_format(F.current_timestamp(), "MM").alias("month"),
+        F.date_format(F.current_timestamp(), "yyyy-MM-dd").alias("ingest_date"),
     )
 
     query = (
@@ -54,7 +53,7 @@ def run() -> None:
         .outputMode("append")
         .option("path", OUTPUT_PATH)
         .option("checkpointLocation", CHECKPOINT_PATH)
-        .partitionBy("year", "month")
+        .partitionBy("ingest_date")
         .trigger(processingTime="30 seconds")
         .start()
     )

@@ -50,11 +50,14 @@ spark-submit \
   --conf "spark.sql.catalog.glue.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog" \
   --conf "spark.sql.catalog.glue.warehouse=s3://binance-iceberg-lake/warehouse" \
   --conf "spark.sql.catalog.glue.io-impl=org.apache.iceberg.aws.s3.S3FileIO" \
-  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider" \
+  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.InstanceProfileCredentialsProvider" \
   --conf "spark.sql.parquet.enableVectorizedReader=false" \
   --conf "spark.sql.iceberg.vectorization.enabled=false" \
-  --conf "spark.sql.shuffle.partitions=8" \
-  --conf "spark.driver.memory=3g" \
+  --conf "spark.sql.shuffle.partitions=2" \
+  --conf "spark.default.parallelism=2" \
+  --conf "spark.driver.memory=2g" \
+  --conf "spark.executor.memory=2g" \
+  --conf "spark.driver.maxResultSize=512m" \
   "$JOB_PATH" \
   --start-ts "$START_TS" \
   --end-ts "$END_TS" \

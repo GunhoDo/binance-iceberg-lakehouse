@@ -27,11 +27,22 @@ DEFAULT_ARGS = {
 }
 
 
-def run_job_task(task_id: str, job_path: str, run_id_suffix: str = "") -> BashOperator:
+def run_job_task(
+    task_id: str,
+    job_path: str,
+    run_id_suffix: str = "",
+    table_health_mode: str | None = None,
+) -> BashOperator:
+    env_args = (
+        f"-e TABLE_HEALTH_MODE={table_health_mode} "
+        if table_health_mode is not None
+        else ""
+    )
+
     return BashOperator(
         task_id=task_id,
         bash_command=f"""
-        docker exec {SPARK_CONTAINER} \
+        docker exec {env_args}{SPARK_CONTAINER} \
           {PROJECT_ROOT}/orchestration/scripts/run_job_with_log.sh \
           {task_id} \
           {job_path} \
@@ -57,6 +68,7 @@ with DAG(
         task_id="check_table_health_before",
         job_path="src/jobs/daily/09_check_table_health.py",
         run_id_suffix="__before",
+        table_health_mode="full",
     )
 
     run_iceberg_maintenance = run_job_task(
@@ -68,6 +80,7 @@ with DAG(
         task_id="check_table_health_after",
         job_path="src/jobs/daily/09_check_table_health.py",
         run_id_suffix="__after",
+        table_health_mode="full",
     )
 
     check_table_health_before >> run_iceberg_maintenance >> check_table_health_after

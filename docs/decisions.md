@@ -297,6 +297,9 @@ trades는 체결 확정 이벤트라 한 번 발생하면 수정되지 않는다
 따라서 trade_id 기준 중복 제거 후 append만 하면 충분하다.
 MERGE가 필요한 것은 값이 나중에 바뀌는 klines와 orders뿐이다.
 
+더 이상 Iceberg의 `MERGE INTO`를 사용하지 않고, 현재 배치에서 `trade_id`를 기준으로 중복을 제거하고, 기존 `processed_trades.trade_id`와 왼쪽 역조인(left-anti join)을 수행한 후, 새 행만 추가합니다.
+이를 통해 재시도/백필의 멱등성을 유지하면서 MERGE 계획 비용, 윈도우 정렬 중복 제거 비용, 그리고 전체 대상 `COUNT(*)` 로깅을 방지할 수 있습니다.
+
 ## D13. Kline `is_closed` 처리
 
 현재 `raw_klines`는 historical kline 기반이며, `message_value`에 WebSocket close flag(`x`)가 없다.
@@ -535,13 +538,77 @@ Observability table은 append-only log table이므로 position delete rewrite �
 
 ---
 
+## D20. Orders simulator 기간 기반 생성과 order_id namespace
+
+### 결정
+
+`orders` simulator는 월별 backfill 또는 dashboard KPI 검증 시, 실행 기간과 주문 ID namespace를 명시적으로 받는다.
+
+추가한 실행 인자는 다음과 같다.
+
+- `--start-ts`: simulated order event 생성 기간의 시작 시각
+- `--end-ts`: simulated order event 생성 기간의 exclusive 종료 시각
+- `--order-id-prefix`: 월/기간별 `order_id` 충돌 방지 prefix
+- `--seed`: 같은 입력으로 재현 가능한 synthetic data 생성을 위한 random seed
+
+`--start-ts`와 `--end-ts`가 모두 제공되면 각 주문의 `NEW` 이벤트 기준 시각인 `base_time_ms`를 다음 범위에서 random sampling한다.
+
+```text
+[start_ms, end_ms - MAX_LIFECYCLE_OFFSET_MS)
+```
+
+현재 `MAX_LIFECYCLE_OFFSET_MS`는 `15_000` milliseconds다. 최종 상태 이벤트(`FILLED` 또는 `CANCELED`)는 `NEW` 이후 최대 15초 안에서 생성되므로, 이 여유 구간을 빼고 sampling해 최종 이벤트가 `end_ts`를 넘지 않도록 한다.
+
+`order_id`는 다음 형식으로 생성한다.
+
+```text
+O{order_id_prefix}{order_index:08d}
+```
+
+예를 들어 `--order-id-prefix 202402`와 `order_index = 1`이면 `O20240200000001`이 된다.
+
+### 이유
+
+Phase 3 window 기반 job은 `start_ts <= event_time < end_ts` 조건으로 처리한다. 따라서 2024년 2월 market data를 적재했는데 orders simulator가 현재 시각 기준 event를 만들면, 2월 window의 `order_execution_summary`에는 주문 KPI가 제대로 잡히지 않는다.
+
+또한 `processed_orders`는 `order_id` 기준으로 최신 주문 상태를 MERGE한다. 월별로 simulator를 다시 실행할 때 `order_id`가 매번 `O00000001`부터 시작하면, 1월 주문과 2월 주문이 같은 주문의 상태 update처럼 처리될 수 있다.
+
+따라서 market KPI와 order KPI를 같은 월/기간 축에서 비교하려면:
+
+- market data는 해당 기간의 trades/klines를 적재한다.
+- order KPI가 필요하면 orders simulator도 같은 기간으로 실행한다.
+- 월별 실행에서는 `YYYYMM` 같은 `order_id_prefix`를 사용한다.
+
+### 대안
+
+- 기존처럼 `now_ms()`만 사용한다.
+  - 빠른 smoke test는 가능하지만 월별 backfill과 dashboard KPI 검증에는 부적합하다.
+- `order_id`에 UUID를 사용한다.
+  - 충돌 방지는 쉽지만 월별 실행 단위가 ID만 보고 드러나지 않는다.
+- `run_id` 또는 `batch_id`를 별도 필드로 추가해 MERGE key에 포함한다.
+  - 더 엄밀한 실행 단위 추적이 가능하지만 `processed_orders`의 key와 downstream 설계를 함께 바꿔야 한다.
+
+### 트레이드오프
+
+- `--start-ts`/`--end-ts`를 주지 않으면 하위 호환을 위해 현재 시각 기반 생성이 유지된다. 단, 이 모드는 월별 KPI 검증용이 아니라 로컬 smoke test용으로 본다.
+- `--order-id-prefix` 기본값은 빈 문자열이다. 기존 ID 형식과 호환되지만, 월별 재실행에서는 사용자가 prefix를 반드시 관리해야 한다.
+- event time은 지정 기간 안에서 random sampling하므로 실제 주문 도착 분포를 재현하는 모델은 아니다. 현재 목적은 시장 microstructure 재현이 아니라 lakehouse MERGE/window 처리 검증이다.
+
+### 재검토 시점
+
+- simulator run 단위 추적이 중요해져 `run_id` 또는 `batch_id`를 schema에 추가할 때.
+- 실제 private order data 또는 더 정교한 order arrival 모델을 도입할 때.
+- `processed_orders`의 MERGE key를 `order_id` 단일 key가 아닌 복합 key로 바꿀 필요가 생길 때.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
 
 - Iceberg MOR 운영 디테일 — 위 D8 참조.
 - Glue Catalog 운영, IAM 권한 모델 — 클라우드 확장 시 별도 학습 필요.
-- QuickSight 권한 / 데이터셋 새로고침 정책.
+- Grafana 권한 / datasource 운영 정책.
 - Spark Structured Streaming의 checkpoint 손상 시 복구 절차 — 실제로 손상시켜 보고
   익혀야 함.
 - Iceberg manifest 파일 구조 — metadata 조회는 가능하지만 내부 동작까지 깊이 알지는

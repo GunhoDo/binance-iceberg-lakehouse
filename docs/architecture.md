@@ -20,7 +20,7 @@
 | `orchestration/scripts/` | Spark job / Spark SQL 실행 wrapper |
 | `spark-runner` | 실제 Spark job과 Spark SQL을 실행하는 컨테이너 |
 | Airflow | DAG orchestration, dependency, schedule, retry, logging |
-| QuickSight | Phase 4에서 serving / observability table 시각화 |
+| Grafana | Phase 4에서 serving / observability table 시각화 |
 
 ---
 
@@ -82,7 +82,7 @@ data_quality_summary
 pipeline_run_summary
 table_health_summary
    ↓
-QuickSight (Phase 4)
+Grafana (Phase 4)
 ```
 
 ---
@@ -317,7 +317,7 @@ Maintenance 전후에는 `table_health_summary`를 적재해 file count, delete 
 
 ## 10. 향후 확장
 
-Phase 4에서는 Athena view와 QuickSight dashboard를 통해 다음 table을 시각화한다.
+Phase 4에서는 Athena view와 Grafana dashboard를 통해 다음 table을 시각화한다.
 
 - `market_hourly_summary`
 - `order_execution_summary`
@@ -325,4 +325,4 @@ Phase 4에서는 Athena view와 QuickSight dashboard를 통해 다음 table을 �
 - `pipeline_run_summary`
 - `table_health_summary`
 
-개발 중 빠른 확인은 Spark SQL 또는 Athena를 사용하고, 발표/모니터링 화면은 QuickSight를 사용한다.
+개발 중 빠른 확인은 Spark SQL 또는 Athena를 사용하고, 발표/모니터링 화면은 Grafana를 사용한다.

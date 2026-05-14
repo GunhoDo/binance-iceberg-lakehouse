@@ -7,9 +7,9 @@ Raw Zone은 Iceberg가 아니다 (decisions.md D7).
 PRD §10.1, §14.1 참조.
 
 실행:
-    PYTHONPATH=. spark-submit \\
-        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \\
-        src/pipelines/stream_raw_trades.py
+    PYTHONPATH=. spark-submit \
+        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,org.apache.hadoop:hadoop-aws:3.3.4 \
+        src/streams/stream_raw_trades.py
 """
 
 from __future__ import annotations
@@ -42,8 +42,7 @@ def run() -> None:
         F.col("timestamp").cast("long").alias("kafka_timestamp"),
         F.col("key").cast("string").alias("message_key"),
         F.col("value").cast("string").alias("message_value"),
-        F.date_format(F.current_timestamp(), "yyyy").alias("year"),
-        F.date_format(F.current_timestamp(), "MM").alias("month"),
+        F.date_format(F.current_timestamp(), "yyyy-MM-dd").alias("ingest_date"),
         F.current_timestamp().cast("string").alias("ingest_time"),
     )
 
@@ -53,7 +52,7 @@ def run() -> None:
         .outputMode("append")
         .option("path", OUTPUT_PATH)
         .option("checkpointLocation", CHECKPOINT_PATH)
-        .partitionBy("year", "month")
+        .partitionBy("ingest_date")
         .trigger(processingTime="30 seconds")
         .start()
     )

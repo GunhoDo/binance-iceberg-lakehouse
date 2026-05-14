@@ -1,13 +1,10 @@
 """01_build_processed_trades_window.py
 
-Phase3 Airflow-ready job.
+Raw trades -> processed_trades ingest-window job.
 
-raw_trades -> processed_trades window 기반 정제 job.
-
-- window 범위의 raw_trades만 처리
-- trade_id 기준 batch 내부 dedup
-- processed_trades에 trade_id 기준 MERGE INSERT
-- Airflow retry / re-run에 대해 idempotent하게 동작
+processed_trades is append-only. The job keeps retry/backfill idempotency by
+removing duplicate trade_id values inside the batch, then appending only trade_id
+values that are not already present in the target table.
 """
 
 from __future__ import annotations
@@ -21,7 +18,6 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
-from pyspark.sql.window import Window
 
 from src.jobs.common.args import parse_job_args
 from src.jobs.common.spark_session import get_spark
@@ -46,8 +42,15 @@ def run() -> None:
 
     raw_df = spark.read.parquet(RAW_TRADES_PATH)
 
+    start_date = F.date_format(F.to_timestamp(F.lit(args.start_ts)), "yyyy-MM-dd")
+    end_date = F.date_format(F.to_timestamp(F.lit(args.end_ts)), "yyyy-MM-dd")
+    partitioned_raw_df = raw_df.where(
+        (F.col("ingest_date") >= start_date)
+        & (F.col("ingest_date") <= end_date)
+    )
+
     windowed_raw_df = (
-        raw_df
+        partitioned_raw_df
         .withColumn("ingest_ts", F.to_timestamp(F.col("ingest_time")))
         .where(
             (F.col("ingest_ts") >= F.to_timestamp(F.lit(args.start_ts)))
@@ -81,42 +84,23 @@ def run() -> None:
         & F.col("trade_time").isNotNull()
     )
 
-    dedup_window = Window.partitionBy("trade_id").orderBy(
-        F.col("source_offset").desc_nulls_last()
+    deduped_df = processed_df.dropDuplicates(["trade_id"])
+
+    existing_trade_ids_df = spark.table(PROCESSED_TRADES).select("trade_id")
+    new_trades_df = deduped_df.join(
+        existing_trade_ids_df,
+        on="trade_id",
+        how="left_anti",
     )
 
-    deduped_df = (
-        processed_df
-        .withColumn("rn", F.row_number().over(dedup_window))
-        .where(F.col("rn") == 1)
-        .drop("rn")
-    )
-
-    deduped_df.createOrReplaceTempView("tmp_processed_trades_batch")
-
-    spark.sql(f"""
-        MERGE INTO {PROCESSED_TRADES} AS target
-        USING tmp_processed_trades_batch AS source
-        ON target.trade_id = source.trade_id
-        WHEN NOT MATCHED THEN INSERT *
-    """)
-
-    source_count = windowed_raw_df.count()
-    batch_count = deduped_df.count()
-    target_total = spark.sql(
-        f"SELECT COUNT(*) AS cnt FROM {PROCESSED_TRADES}"
-    ).collect()[0]["cnt"]
+    new_trades_df.writeTo(PROCESSED_TRADES).append()
 
     print(
         "[phase3_build_processed_trades_window] complete "
         f"run_id={args.run_id}, "
         f"start_ts={args.start_ts}, "
-        f"end_ts={args.end_ts}, "
-        f"raw_window_rows={source_count}, "
-        f"deduped_batch_rows={batch_count}, "
-        f"target_total_rows={target_total}"
+        f"end_ts={args.end_ts}"
     )
-
     spark.stop()
 
 

@@ -1,10 +1,9 @@
 """07_build_order_execution_summary_window.py
 
-processed_orders -> order_execution_summary window 기반 MERGE job.
+processed_orders -> order_execution_summary MERGE job.
 
-멱등성 기준:
-- (summary_hour, symbol) 기준 MERGE
-- source view 컬럼 순서를 target table과 맞춘 뒤 INSERT * 사용
+Affected summary keys are selected by ingest_time. The summary hour itself stays
+on business time: order created_at.
 """
 
 from __future__ import annotations
@@ -20,43 +19,70 @@ def run() -> None:
 
     spark.sql(f"""
         CREATE OR REPLACE TEMP VIEW order_execution_summary_source AS
+        WITH affected_summary_keys AS (
+            SELECT DISTINCT
+                date_trunc('hour', created_at) AS summary_hour,
+                symbol
+            FROM {PROCESSED_ORDERS}
+            WHERE to_timestamp(ingest_time) >= TIMESTAMP '{args.start_ts}'
+              AND to_timestamp(ingest_time) < TIMESTAMP '{args.end_ts}'
+              AND created_at IS NOT NULL
+              AND symbol IS NOT NULL
+        ),
+        order_hourly AS (
+            SELECT
+                keys.summary_hour,
+                keys.symbol,
+
+                CAST(count(*) AS BIGINT) AS total_orders,
+
+                CAST(sum(CASE WHEN p.order_status = 'FILLED' THEN 1 ELSE 0 END) AS BIGINT) AS filled_orders,
+                CAST(sum(CASE WHEN p.order_status = 'CANCELED' THEN 1 ELSE 0 END) AS BIGINT) AS canceled_orders,
+
+                CAST(sum(CASE WHEN p.order_status = 'FILLED' THEN 1 ELSE 0 END) AS DOUBLE)
+                    / CAST(count(*) AS DOUBLE) AS fill_rate,
+
+                CAST(sum(CASE WHEN p.order_status = 'CANCELED' THEN 1 ELSE 0 END) AS DOUBLE)
+                    / CAST(count(*) AS DOUBLE) AS cancel_rate,
+
+                CAST(avg(
+                    CASE
+                        WHEN p.order_status = 'FILLED'
+                             AND p.filled_at IS NOT NULL
+                             AND p.created_at IS NOT NULL
+                        THEN unix_timestamp(p.filled_at) - unix_timestamp(p.created_at)
+                        ELSE NULL
+                    END
+                ) AS DOUBLE) AS avg_fill_delay_sec,
+
+                CAST(avg(p.order_qty) AS DECIMAL(20, 8)) AS avg_order_qty,
+                CAST(avg(p.filled_qty) AS DECIMAL(20, 8)) AS avg_filled_qty,
+                CAST(sum(p.order_qty) AS DECIMAL(30, 8)) AS total_order_qty,
+                CAST(sum(p.filled_qty) AS DECIMAL(30, 8)) AS total_filled_qty
+            FROM affected_summary_keys keys
+            JOIN {PROCESSED_ORDERS} p
+              ON date_trunc('hour', p.created_at) = keys.summary_hour
+             AND p.symbol = keys.symbol
+            GROUP BY keys.summary_hour, keys.symbol
+        )
         SELECT
-            date_trunc('hour', created_at) AS summary_hour,
-            symbol,
-
-            CAST(count(*) AS BIGINT) AS total_orders,
-
-            CAST(sum(CASE WHEN order_status = 'FILLED' THEN 1 ELSE 0 END) AS BIGINT) AS filled_orders,
-            CAST(sum(CASE WHEN order_status = 'CANCELED' THEN 1 ELSE 0 END) AS BIGINT) AS canceled_orders,
-
-            CAST(sum(CASE WHEN order_status = 'FILLED' THEN 1 ELSE 0 END) AS DOUBLE)
-                / CAST(count(*) AS DOUBLE) AS fill_rate,
-
-            CAST(sum(CASE WHEN order_status = 'CANCELED' THEN 1 ELSE 0 END) AS DOUBLE)
-                / CAST(count(*) AS DOUBLE) AS cancel_rate,
-
-            CAST(avg(
-                CASE
-                    WHEN order_status = 'FILLED'
-                         AND filled_at IS NOT NULL
-                         AND created_at IS NOT NULL
-                    THEN unix_timestamp(filled_at) - unix_timestamp(created_at)
-                    ELSE NULL
-                END
-            ) AS DOUBLE) AS avg_fill_delay_sec,
-
-            CAST(avg(order_qty) AS DECIMAL(20, 8)) AS avg_order_qty,
-            CAST(avg(filled_qty) AS DECIMAL(20, 8)) AS avg_filled_qty,
-            CAST(sum(order_qty) AS DECIMAL(30, 8)) AS total_order_qty,
-            CAST(sum(filled_qty) AS DECIMAL(30, 8)) AS total_filled_qty,
-
+            keys.summary_hour AS summary_hour,
+            keys.symbol AS symbol,
+            o.total_orders AS total_orders,
+            o.filled_orders AS filled_orders,
+            o.canceled_orders AS canceled_orders,
+            o.fill_rate AS fill_rate,
+            o.cancel_rate AS cancel_rate,
+            o.avg_fill_delay_sec AS avg_fill_delay_sec,
+            o.avg_order_qty AS avg_order_qty,
+            o.avg_filled_qty AS avg_filled_qty,
+            o.total_order_qty AS total_order_qty,
+            o.total_filled_qty AS total_filled_qty,
             current_timestamp() AS updated_at
-        FROM {PROCESSED_ORDERS}
-        WHERE created_at >= TIMESTAMP '{args.start_ts}'
-          AND created_at < TIMESTAMP '{args.end_ts}'
-          AND created_at IS NOT NULL
-          AND symbol IS NOT NULL
-        GROUP BY date_trunc('hour', created_at), symbol
+        FROM affected_summary_keys keys
+        LEFT JOIN order_hourly o
+          ON o.summary_hour = keys.summary_hour
+         AND o.symbol = keys.symbol
     """)
 
     spark.sql(f"""

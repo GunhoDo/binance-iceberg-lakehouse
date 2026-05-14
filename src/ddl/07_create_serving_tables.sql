@@ -1,6 +1,6 @@
 -- 05_create_serving_tables.sql
 --
--- Serving tables — QuickSight 조회 대상. PRD §10.6, §11 (COW), §13.1 참조.
+-- Serving tables — Grafana 조회 대상. PRD §10.6, §11 (COW), §13.1 참조.
 --
 -- 본 단계의 컬럼은 PRD §10.6 / §13.1의 지표 목록을 기반으로 작성한다.
 -- 정확한 타입과 partition은 Phase 2에서 결정 (decisions.md D9).

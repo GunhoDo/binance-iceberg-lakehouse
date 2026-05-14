@@ -39,6 +39,48 @@ def scalar(spark, query: str):
     return spark.sql(query).collect()[0][0]
 
 
+def window_where(time_column: str, start_ts: str, end_ts: str) -> str:
+    return (
+        f"{time_column} >= to_timestamp('{start_ts}') "
+        f"AND {time_column} < to_timestamp('{end_ts}')"
+    )
+
+
+def filtered_table(table_name: str, time_column: str, start_ts: str, end_ts: str) -> str:
+    return f"(SELECT * FROM {table_name} WHERE {window_where(time_column, start_ts, end_ts)}) AS windowed"
+
+
+def count_query(table_name: str, time_column: str, start_ts: str, end_ts: str) -> str:
+    return f"SELECT COUNT(*) FROM {filtered_table(table_name, time_column, start_ts, end_ts)}"
+
+
+def null_count_query(
+    table_name: str,
+    time_column: str,
+    start_ts: str,
+    end_ts: str,
+    null_condition: str,
+) -> str:
+    return f"""
+        SELECT COUNT(*)
+        FROM {filtered_table(table_name, time_column, start_ts, end_ts)}
+        WHERE {null_condition}
+        """
+
+
+def duplicate_count_query(
+    table_name: str,
+    time_column: str,
+    start_ts: str,
+    end_ts: str,
+    distinct_expr: str,
+) -> str:
+    return f"""
+        SELECT COUNT(*) - COUNT(DISTINCT {distinct_expr})
+        FROM {filtered_table(table_name, time_column, start_ts, end_ts)}
+        """
+
+
 def add_result(
     results: list[Row],
     run_id: str,
@@ -85,18 +127,19 @@ def run() -> None:
     spark = get_spark("phase3_check_data_quality")
 
     results: list[Row] = []
+    window_message = f"window=[{args.start_ts}, {args.end_ts})"
 
     # -------------------------------------------------------------------------
     # processed_trades
     # -------------------------------------------------------------------------
-    row_count = scalar(spark, f"SELECT COUNT(*) FROM {PROCESSED_TRADES}")
-    null_count = scalar(spark, f"SELECT COUNT(*) FROM {PROCESSED_TRADES} WHERE trade_id IS NULL")
+    row_count = scalar(spark, count_query(PROCESSED_TRADES, "trade_time", args.start_ts, args.end_ts))
+    null_count = scalar(
+        spark,
+        null_count_query(PROCESSED_TRADES, "trade_time", args.start_ts, args.end_ts, "trade_id IS NULL"),
+    )
     duplicate_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*) - COUNT(DISTINCT trade_id)
-        FROM {PROCESSED_TRADES}
-        """
+        duplicate_count_query(PROCESSED_TRADES, "trade_time", args.start_ts, args.end_ts, "trade_id"),
     )
     add_result(
         results,
@@ -106,26 +149,32 @@ def run() -> None:
         row_count,
         null_count,
         duplicate_count,
+        window_message,
     )
 
     # -------------------------------------------------------------------------
     # processed_klines
     # -------------------------------------------------------------------------
-    row_count = scalar(spark, f"SELECT COUNT(*) FROM {PROCESSED_KLINES}")
+    row_count = scalar(spark, count_query(PROCESSED_KLINES, "open_time", args.start_ts, args.end_ts))
     null_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*)
-        FROM {PROCESSED_KLINES}
-        WHERE symbol IS NULL OR interval IS NULL OR open_time IS NULL
-        """
+        null_count_query(
+            PROCESSED_KLINES,
+            "open_time",
+            args.start_ts,
+            args.end_ts,
+            "symbol IS NULL OR `interval` IS NULL OR open_time IS NULL",
+        ),
     )
     duplicate_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*) - COUNT(DISTINCT concat(symbol, ':', interval, ':', cast(open_time AS string)))
-        FROM {PROCESSED_KLINES}
-        """
+        duplicate_count_query(
+            PROCESSED_KLINES,
+            "open_time",
+            args.start_ts,
+            args.end_ts,
+            "concat_ws(':', symbol, `interval`, cast(open_time AS string))",
+        ),
     )
     add_result(
         results,
@@ -135,19 +184,20 @@ def run() -> None:
         row_count,
         null_count,
         duplicate_count,
+        window_message,
     )
 
     # -------------------------------------------------------------------------
     # processed_orders
     # -------------------------------------------------------------------------
-    row_count = scalar(spark, f"SELECT COUNT(*) FROM {PROCESSED_ORDERS}")
-    null_count = scalar(spark, f"SELECT COUNT(*) FROM {PROCESSED_ORDERS} WHERE order_id IS NULL")
+    row_count = scalar(spark, count_query(PROCESSED_ORDERS, "updated_at", args.start_ts, args.end_ts))
+    null_count = scalar(
+        spark,
+        null_count_query(PROCESSED_ORDERS, "updated_at", args.start_ts, args.end_ts, "order_id IS NULL"),
+    )
     duplicate_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*) - COUNT(DISTINCT order_id)
-        FROM {PROCESSED_ORDERS}
-        """
+        duplicate_count_query(PROCESSED_ORDERS, "updated_at", args.start_ts, args.end_ts, "order_id"),
     )
     add_result(
         results,
@@ -157,26 +207,32 @@ def run() -> None:
         row_count,
         null_count,
         duplicate_count,
+        window_message,
     )
 
     # -------------------------------------------------------------------------
     # market_hourly_summary
     # -------------------------------------------------------------------------
-    row_count = scalar(spark, f"SELECT COUNT(*) FROM {MARKET_HOURLY_SUMMARY}")
+    row_count = scalar(spark, count_query(MARKET_HOURLY_SUMMARY, "summary_hour", args.start_ts, args.end_ts))
     null_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*)
-        FROM {MARKET_HOURLY_SUMMARY}
-        WHERE symbol IS NULL OR summary_hour IS NULL
-        """
+        null_count_query(
+            MARKET_HOURLY_SUMMARY,
+            "summary_hour",
+            args.start_ts,
+            args.end_ts,
+            "symbol IS NULL OR summary_hour IS NULL",
+        ),
     )
     duplicate_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*) - COUNT(DISTINCT concat(symbol, ':', cast(summary_hour AS string)))
-        FROM {MARKET_HOURLY_SUMMARY}
-        """
+        duplicate_count_query(
+            MARKET_HOURLY_SUMMARY,
+            "summary_hour",
+            args.start_ts,
+            args.end_ts,
+            "concat_ws(':', symbol, cast(summary_hour AS string))",
+        ),
     )
     add_result(
         results,
@@ -186,26 +242,32 @@ def run() -> None:
         row_count,
         null_count,
         duplicate_count,
+        window_message,
     )
 
     # -------------------------------------------------------------------------
     # order_execution_summary
     # -------------------------------------------------------------------------
-    row_count = scalar(spark, f"SELECT COUNT(*) FROM {ORDER_EXECUTION_SUMMARY}")
+    row_count = scalar(spark, count_query(ORDER_EXECUTION_SUMMARY, "summary_hour", args.start_ts, args.end_ts))
     null_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*)
-        FROM {ORDER_EXECUTION_SUMMARY}
-        WHERE symbol IS NULL OR summary_hour IS NULL
-        """
+        null_count_query(
+            ORDER_EXECUTION_SUMMARY,
+            "summary_hour",
+            args.start_ts,
+            args.end_ts,
+            "symbol IS NULL OR summary_hour IS NULL",
+        ),
     )
     duplicate_count = scalar(
         spark,
-        f"""
-        SELECT COUNT(*) - COUNT(DISTINCT concat(symbol, ':', cast(summary_hour AS string)))
-        FROM {ORDER_EXECUTION_SUMMARY}
-        """
+        duplicate_count_query(
+            ORDER_EXECUTION_SUMMARY,
+            "summary_hour",
+            args.start_ts,
+            args.end_ts,
+            "concat_ws(':', symbol, cast(summary_hour AS string))",
+        ),
     )
     add_result(
         results,
@@ -215,6 +277,7 @@ def run() -> None:
         row_count,
         null_count,
         duplicate_count,
+        window_message,
     )
 
     result_df = spark.createDataFrame(results, schema=RESULT_SCHEMA).withColumn(

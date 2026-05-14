@@ -16,11 +16,22 @@ Iceberg MERGE 기반 주문 상태 관리 실험을 위해 synthetic order event
     NEW → FILLED
 
 실행:
-    python simulators/order_simulator.py \
+    python src/simulators/orders_simulator.py \
       --bootstrap localhost:9092 \
       --topic orders \
-      --num-orders 1000 \
+      --num-orders 10000 \
       --reference-close 43000
+
+    python src/simulators/orders_simulator.py \
+      --bootstrap localhost:9092 \
+      --topic orders \
+      --num-orders 10000 \
+      --reference-close 43000 \
+      --symbol BTCUSDT \
+        --start-ts 2024-01-01T00:00:00Z \
+        --end-ts 2024-02-01T00:00:00Z \
+      --order-id-prefix 202401 \
+      --seed 42
 """
 from __future__ import annotations
 
@@ -48,12 +59,26 @@ MIN_QTY = 0.001
 MAX_QTY = 0.08
 
 PRICE_DEVIATION_RATE = 0.003
+MAX_LIFECYCLE_OFFSET_MS = 15_000
 # reference_close 기준 ±0.3% 범위에서 주문 가격 샘플링
 
 
 def now_ms() -> int:
     """현재 UTC epoch milliseconds."""
     return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+
+def parse_timestamp_ms(value: str) -> int:
+    """Parse an ISO-8601 timestamp to UTC epoch milliseconds."""
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
 
 
 def decimal_str(value: float, scale: int = 8) -> str:
@@ -96,13 +121,18 @@ def sample_order_qty() -> float:
     return random.uniform(MIN_QTY, MAX_QTY)
 
 
-def make_base_order(order_index: int, reference_close: float, symbol: str) -> dict[str, Any]:
+def make_base_order(
+    order_index: int,
+    reference_close: float,
+    symbol: str,
+    order_id_prefix: str,
+) -> dict[str, Any]:
     """단일 주문의 기본 정보를 생성한다."""
     order_price = sample_order_price(reference_close)
     order_qty = sample_order_qty()
 
     return {
-        "order_id": f"O{order_index:08d}",
+        "order_id": f"O{order_id_prefix}{order_index:08d}",
         "client_id": f"C{random.randint(1, DEFAULT_CLIENT_COUNT):04d}",
         "symbol": symbol,
         "side": sample_side(),
@@ -143,7 +173,11 @@ def create_order_event(
     }
 
 
-def decide_lifecycle(order: dict[str, Any], market_context: dict[str, Any]) -> list[dict[str, Any]]:
+def decide_lifecycle(
+    order: dict[str, Any],
+    market_context: dict[str, Any],
+    base_time_ms: int,
+) -> list[dict[str, Any]]:
     """단일 주문의 생애 주기를 event sequence로 풀어낸다.
 
     상태 전이:
@@ -164,12 +198,16 @@ def decide_lifecycle(order: dict[str, Any], market_context: dict[str, Any]) -> l
         "price_deviation_rate": PRICE_DEVIATION_RATE,
         "reference_close": market_context["reference_close"],
         "qty_range": [MIN_QTY, MAX_QTY],
+        "simulation_start_ts": market_context.get("simulation_start_ts"),
+        "simulation_end_ts": market_context.get("simulation_end_ts"),
+        "order_id_prefix": market_context["order_id_prefix"],
+        "max_lifecycle_offset_ms": MAX_LIFECYCLE_OFFSET_MS,
         "note": "synthetic order event, not real Binance private data",
     }
 
     events: list[dict[str, Any]] = []
 
-    base_time = now_ms()
+    base_time = base_time_ms
 
     # 1. NEW
     events.append(
@@ -206,7 +244,7 @@ def decide_lifecycle(order: dict[str, Any], market_context: dict[str, Any]) -> l
         )
 
     # 3. Final state
-    final_time = base_time + random.randint(3000, 15000)
+    final_time = base_time + random.randint(3000, MAX_LIFECYCLE_OFFSET_MS)
 
     if is_canceled:
         events.append(
@@ -267,6 +305,23 @@ def publish_to_kafka(
     return sent_count
 
 
+def sample_base_time_ms(start_ms: int | None, end_ms: int | None) -> int:
+    """Sample the order NEW event time inside the configured simulation window."""
+    if start_ms is None and end_ms is None:
+        return now_ms()
+    if start_ms is None or end_ms is None:
+        raise ValueError("--start-ts and --end-ts must be provided together")
+
+    latest_start_ms = end_ms - MAX_LIFECYCLE_OFFSET_MS
+    if latest_start_ms <= start_ms:
+        raise ValueError(
+            "--end-ts must be more than "
+            f"{MAX_LIFECYCLE_OFFSET_MS}ms after --start-ts"
+        )
+
+    return random.randrange(start_ms, latest_start_ms)
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(description="Synthetic orders simulator")
     parser.add_argument("--bootstrap", default="localhost:9092")
@@ -275,12 +330,40 @@ def run() -> None:
     parser.add_argument("--reference-close", type=float, default=43000.0)
     parser.add_argument("--symbol", default=DEFAULT_SYMBOL)
     parser.add_argument("--max-sleep-ms", type=int, default=10)
+    parser.add_argument("--start-ts")
+    parser.add_argument("--end-ts")
+    parser.add_argument("--order-id-prefix", default="")
+    parser.add_argument("--seed", type=int)
     args = parser.parse_args()
+
+    if args.num_orders < 1:
+        parser.error("--num-orders must be >= 1")
+    if (args.start_ts is None) != (args.end_ts is None):
+        parser.error("--start-ts and --end-ts must be provided together")
+    if args.seed is not None:
+        random.seed(args.seed)
+
+    try:
+        start_ms = parse_timestamp_ms(args.start_ts) if args.start_ts else None
+        end_ms = parse_timestamp_ms(args.end_ts) if args.end_ts else None
+    except ValueError as exc:
+        parser.error(f"invalid timestamp: {exc}")
+
+    if start_ms is not None and end_ms is not None:
+        latest_start_ms = end_ms - MAX_LIFECYCLE_OFFSET_MS
+        if latest_start_ms <= start_ms:
+            parser.error(
+                "--end-ts must be more than "
+                f"{MAX_LIFECYCLE_OFFSET_MS}ms after --start-ts"
+            )
 
     producer = build_producer(args.bootstrap)
 
     market_context = {
         "reference_close": args.reference_close,
+        "simulation_start_ts": args.start_ts,
+        "simulation_end_ts": args.end_ts,
+        "order_id_prefix": args.order_id_prefix,
     }
 
     total_events = 0
@@ -291,9 +374,11 @@ def run() -> None:
                 order_index=order_index,
                 reference_close=args.reference_close,
                 symbol=args.symbol,
+                order_id_prefix=args.order_id_prefix,
             )
 
-            events = decide_lifecycle(order, market_context)
+            base_time_ms = sample_base_time_ms(start_ms, end_ms)
+            events = decide_lifecycle(order, market_context, base_time_ms)
             total_events += publish_to_kafka(producer, events, args.topic)
 
             sleep_seconds = sample_arrival_interval(args.max_sleep_ms)
@@ -307,7 +392,8 @@ def run() -> None:
 
     print(
         f"orders simulator 완료: "
-        f"{args.num_orders} orders, {total_events} events sent to topic={args.topic}"
+        f"{args.num_orders} orders, {total_events} events sent to topic={args.topic}, "
+        f"order_id_prefix={args.order_id_prefix}"
     )
 
 

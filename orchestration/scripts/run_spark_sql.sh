@@ -27,8 +27,8 @@ mkdir -p "$DERBY_HOME"
 GLUE_CATALOG_NAME="${GLUE_CATALOG_NAME:-glue}"
 GLUE_WAREHOUSE="${GLUE_WAREHOUSE:-s3://binance-iceberg-lake/warehouse}"
 
-SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-3g}"
-SPARK_SHUFFLE_PARTITIONS="${SPARK_SHUFFLE_PARTITIONS:-8}"
+SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-2g}"
+SPARK_SHUFFLE_PARTITIONS="${SPARK_SHUFFLE_PARTITIONS:-2}"
 
 export PYTHONPATH="${PYTHONPATH:-.}"
 
@@ -44,7 +44,7 @@ COMMON_ARGS=(
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog"
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}.warehouse=${GLUE_WAREHOUSE}"
   --conf "spark.sql.catalog.${GLUE_CATALOG_NAME}.io-impl=org.apache.iceberg.aws.s3.S3FileIO"
-  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
+  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.InstanceProfileCredentialsProvider"
   --conf "spark.sql.parquet.enableVectorizedReader=false"
   --conf "spark.sql.iceberg.vectorization.enabled=false"
   --conf "spark.sql.shuffle.partitions=${SPARK_SHUFFLE_PARTITIONS}"
