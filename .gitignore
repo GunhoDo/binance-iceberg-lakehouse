@@ -38,3 +38,6 @@ get-docker.*
 logs/
 metastore_db/
 .ipynb_*
+
+# --- 툴링 작업 폴더 (OMC 등) ---
+.omc/
