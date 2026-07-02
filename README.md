@@ -362,7 +362,8 @@ binance-iceberg-lakehouse/
 │   ├── Dockerfile.spark
 │   ├── bootstrap_ec2.sh
 │   ├── download_data.sh
-│   └── csv_to_kafka.py
+│   ├── csv_to_kafka.py       # 통제 리플레이 프로듀서 (벤치마크 부하)
+│   └── ws_to_kafka.py        # Binance 공개 WebSocket 실시간 프로듀서 (P0)
 │
 ├── src/
 │   ├── ddl/
@@ -437,13 +438,24 @@ binance-iceberg-lakehouse/
 
 ### 10. CSV → Kafka → S3 -> table -> airflow -> grafana 구조
 
-실제 Raw Zone에 바로 CSV를 저장하는 것이 아니라, CSV 또는 simulator가 생성한 이벤트를 Kafka로 먼저 발행한다.  
+실제 Raw Zone에 바로 CSV를 저장하는 것이 아니라, CSV·simulator·**Binance 실시간 WebSocket**이 생성한 이벤트를 Kafka로 먼저 발행한다.  
 이후 Spark Structured Streaming Job이 Kafka topic을 구독하여 S3 Raw Zone에 Parquet 형식으로 적재한다.
 
+> **수집 소스 이원화 (PRD v2)**: 벤치마크 부하는 재현성을 위해 `infra/csv_to_kafka.py`(통제 리플레이)로,
+> "실시간" 수집·품질 이상탐지 데모는 `infra/ws_to_kafka.py`(Binance 공개 WebSocket)로 분리한다.
+> 두 프로듀서는 동일한 토픽·레코드 스키마·key 컨벤션을 사용해 downstream이 구분 없이 소비한다.
+>
+> ```bash
+> # 실시간 수집 (aggTrade + kline_1m → trades/klines 토픽)
+> python infra/ws_to_kafka.py --symbols BTCUSDT
+> # Kafka 없이 매핑만 확인
+> python infra/ws_to_kafka.py --symbols BTCUSDT --dry-run
+> ```
+
 ```text
-local CSV / simulator 
+local CSV / simulator / Binance WebSocket
         ↓
-infra/csv_to_kafka.py / src/simulators/orders_simulator.py
+infra/csv_to_kafka.py / src/simulators/orders_simulator.py / infra/ws_to_kafka.py
         ↓
 Kafka producer
         ↓
