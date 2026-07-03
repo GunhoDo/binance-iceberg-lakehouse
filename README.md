@@ -483,4 +483,6 @@ connect grafana UI:3000
 - `docs/architecture.md` — 아키텍처와 책임 경계
 - `docs/operations.md` — 운영 지표, Airflow, maintenance 정책
 - `docs/simulator_design.md` — 주문 시뮬레이터 설계
+- `docs/benchmark_lag.md` — P2/P3 스트리밍 end-to-end lag 벤치마크 (센터피스)
+- `docs/data_quality.md` — P4 데이터 품질 이상탐지 (freshness/gap/order/null/schema)
 - `docs/grafana_metrics.md` — Phase 4 Grafana dashboard 지표
