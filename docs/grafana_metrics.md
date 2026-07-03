@@ -100,7 +100,84 @@ Thresholds:
 - Avg Delete/Data Ratio: green below 0.3, yellow from 0.3, red from 0.5
 - Avg File Size MB: red below 16, yellow from 16, green from 64
 
-## Current Gaps
+## Streaming End-to-End Lag (P5 신규)
 
-- `pipeline_run_summary`는 아직 별도 Grafana dashboard에 연결되어 있지 않다.
-- Grafana alert rule은 아직 JSON/provisioning으로 정의하지 않았다. 현재는 panel threshold로만 위험 신호를 표시한다.
+dashboard file: `dashboard/grafana/dashboards/streaming-lag.json`
+source: `lag_samples` (P2/P3 벤치 센터피스)
+
+| Panel | Type | Metrics | Query 기준 |
+|---|---|---|---|
+| p50/p95/p99 Lag (latest run) | stat | `approx_percentile(lag_ms, x)/1000` | `run_id = 최신 commit_ts` |
+| Throughput (latest run) | stat | `count / (max(commit_ts)-min(produce_ts))` | 최신 run |
+| Lag Percentiles over Time | timeseries | p50/p95/p99 | `from_unixtime(commit_ts/1000)` 버킷 |
+| Ablation by Config | table | config별 p50/p95/p99·max·throughput | `GROUP BY config_label ORDER BY p95` |
+
+- Thresholds(p95): green < 15s, yellow ≥ 15s, red ≥ 25s. 단위 `s`.
+- 기본 time range는 `now-24h`(lag는 벤치 실행 wall-clock 기준).
+- **데이터소스 전제(정직)**: `lag_samples`는 벤치가 **로컬 hadoop catalog(file://)** 에 쓴다.
+  이 Athena 대시보드가 값을 보려면 lag_samples가 **lakehouse(Glue/S3)에 발행**돼 있어야 한다
+  (예: 벤치를 glue catalog로 실행하거나 별도 publish). 대시보드 JSON은 두 경우 동일.
+
+## Data Quality Anomalies (P5 신규)
+
+dashboard file: `dashboard/grafana/dashboards/quality-events.json`
+source: `quality_events` (P4 이상탐지 출력)
+
+| Panel | Type | Metrics | Query 기준 |
+|---|---|---|---|
+| CRITICAL / WARN Anomalies | stat | `COUNT(*)` by severity | 최근 7일 |
+| Distinct Checks Firing | stat | `COUNT(DISTINCT check_name)` | 최근 7일 |
+| Tables with Anomalies | stat | `COUNT(DISTINCT source_table)` | 최근 7일 |
+| Anomaly Count by Check | timeseries | check_name별 건수 | 최근 30일 |
+| Anomaly Count by Severity | timeseries | CRITICAL/WARN 건수 | 최근 30일 |
+| Recent Anomalies | table | detected_at·severity·check·dimension·detail | latest 100 by `detected_at DESC` |
+
+- Thresholds: CRITICAL green at 0 / red from 1, WARN green at 0 / yellow from 1.
+
+## Pipeline Run Status (P5 신규)
+
+dashboard file: `dashboard/grafana/dashboards/pipeline-runs.json`
+source: `pipeline_run_summary`
+
+| Panel | Type | Metrics | Query 기준 |
+|---|---|---|---|
+| Succeeded / Failed Tasks | stat | `COUNT(*)` by status | 최근 30일 |
+| Success Rate (%) | stat | `succeeded / total * 100` | 최근 30일 |
+| Avg Task Duration (s) | stat | `AVG(duration_sec)` | 최근 30일 |
+| Succeeded/Failed over Time | timeseries | status별 건수 | 최근 30일 |
+| Task Duration by Task | timeseries | `duration_sec` by task | 최근 30일 |
+| Recent Pipeline Runs | table | status·duration·rows·error | latest 100 by `created_at DESC` |
+
+- `status`는 `UPPER(status) IN ('SUCCESS','SUCCEEDED')` / `('FAILED','FAILURE','ERROR')`로 방어적 비교.
+- Success Rate thresholds: red < 90, yellow ≥ 90, green ≥ 99.
+
+## Alerting (P5 신규 / FR-11 알림 연동)
+
+provisioning: `dashboard/grafana/provisioning/alerting/`
+
+| 파일 | 역할 |
+|---|---|
+| `contact-points.yaml` | Discord contact point (`${DISCORD_WEBHOOK_URL}` 확장, 미설정 시 graceful) |
+| `notification-policies.yaml` | CRITICAL은 빠른 그룹핑으로 Discord 라우팅 |
+| `alert-rules.yaml` | ① `quality_events` CRITICAL 존재(24h) ② `pipeline_run_summary` 실패(24h) → Discord |
+
+- 각 룰: Athena 쿼리(A) → reduce last(B) → threshold > 0 (C). condition=C.
+- webhook은 docker-compose grafana 서비스의 `DISCORD_WEBHOOK_URL`로 주입. P4 `quality_scan`
+  Discord 알림과 **같은 채널**을 재사용해 알림 경로를 일원화한다.
+- **검증됨(grafana 프로파일 실기동)**: 대시보드 7개(신규 3 포함)·알림 룰 2개·Discord contact
+  point가 provisioning으로 정상 등록됨을 Grafana API로 확인. 데이터 렌더링은 Athena 필요.
+- **주의(실측)**: 잘못된 alerting provisioning은 격리되지 않고 **Grafana 기동 자체를 실패**
+  시킨다. 특히 discord contact point는 빈 webhook url이면 provisioning 전체가 죽는다.
+  그래서 compose는 미설정 시 placeholder url을 기본값으로 넣어 Grafana가 항상 기동하게 하고,
+  실제 전송만 조용히 실패시킨다(진짜 graceful).
+
+## Current Gaps / 정직성 한계
+
+- **모든 대시보드·알림은 config-only**: 실제 렌더링은 Athena datasource + AWS(Glue/S3)가
+  있어야 확인된다(기존 4개 대시보드도 동일). 저장소 검증 범위는 JSON/YAML 유효성 + rawSQL
+  컬럼이 DDL과 일치하는지까지.
+- **lag 대시보드는 lag_samples의 lakehouse 발행에 의존**(위 §Streaming Lag 전제).
+- alert-rules.yaml의 Athena query model은 Grafana 버전별 필드 차이가 있을 수 있어
+  첫 로드 시 Alerting > Alert rules에서 상태 확인이 필요하다.
+- **alerting provisioning은 격리되지 않는다**: 오류 시 Grafana 기동 자체가 실패하므로,
+  이 디렉터리를 수정하면 반드시 grafana를 재기동해 provisioning 에러가 없는지 확인할 것.

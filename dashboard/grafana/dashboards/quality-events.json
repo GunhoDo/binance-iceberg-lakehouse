@@ -1,0 +1,140 @@
+{
+  "uid": "quality-events",
+  "title": "Data Quality Anomalies",
+  "tags": ["data-quality", "anomaly", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "CRITICAL Anomalies (7d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(*) AS critical_count FROM quality_events WHERE severity = 'CRITICAL' AND detected_at >= (SELECT MAX(detected_at) - INTERVAL '7' DAY FROM quality_events)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "WARN Anomalies (7d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(*) AS warn_count FROM quality_events WHERE severity = 'WARN' AND detected_at >= (SELECT MAX(detected_at) - INTERVAL '7' DAY FROM quality_events)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Distinct Checks Firing (7d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(DISTINCT check_name) AS checks_firing FROM quality_events WHERE detected_at >= (SELECT MAX(detected_at) - INTERVAL '7' DAY FROM quality_events)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Tables with Anomalies (7d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(DISTINCT source_table) AS affected_tables FROM quality_events WHERE detected_at >= (SELECT MAX(detected_at) - INTERVAL '7' DAY FROM quality_events)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Anomaly Count by Check",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT detected_at AS time, check_name, COUNT(*) AS anomalies FROM quality_events WHERE detected_at >= (SELECT MAX(detected_at) - INTERVAL '30' DAY FROM quality_events) GROUP BY detected_at, check_name ORDER BY detected_at, check_name"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Anomaly Count by Severity",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT detected_at AS time, SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END) AS critical, SUM(CASE WHEN severity = 'WARN' THEN 1 ELSE 0 END) AS warn FROM quality_events WHERE detected_at >= (SELECT MAX(detected_at) - INTERVAL '30' DAY FROM quality_events) GROUP BY detected_at ORDER BY detected_at"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Recent Anomalies",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT detected_at, severity, check_name, source_table, dimension, observed, threshold, detail, run_id FROM quality_events ORDER BY detected_at DESC LIMIT 100"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 }
+    }
+  ]
+}

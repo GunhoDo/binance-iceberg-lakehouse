@@ -1,0 +1,23 @@
+# Grafana 알림 채널 — Discord (PRD v2 FR-11 "알림 연동").
+#
+# P4의 quality_scan Discord 알림과 같은 채널을 Grafana에서도 쓴다. webhook URL은
+# 환경변수로 주입한다: docker-compose grafana 서비스에 DISCORD_WEBHOOK_URL 설정.
+# Grafana는 provisioning에서 ${VAR}를 환경변수로 확장한다.
+#
+# 주의(실측 검증됨): Grafana는 discord contact point에 '비어있지 않은' url을 요구하며,
+# 빈 값이면 provisioning 모듈 전체가 실패해 **Grafana 자체가 기동하지 못한다**(격리 안 됨).
+# 그래서 docker-compose는 미설정 시 placeholder url을 기본값으로 넣어 검증만 통과시키고,
+# 실제 전송은 조용히 실패하게 한다(= graceful: 알림만 안 가고 Grafana·대시보드는 정상).
+# 실제 알림을 켜려면 host env DISCORD_WEBHOOK_URL에 진짜 webhook을 설정하라.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: Discord Quality Alerts
+    receivers:
+      - uid: discord_quality
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_URL}
+          use_discord_username: true
+        disableResolveMessage: false
