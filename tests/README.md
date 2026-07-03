@@ -11,6 +11,8 @@ Spark/Iceberg 런타임 없이 PRD/Decision의 핵심 약속이 코드에 반영
 - Idempotency: `trade_id`, Kafka offset 기반 재실행 안전성
 - Observability: `data_quality_summary`, `table_health_summary` append-only table 정책
 - Maintenance: MOR table 대상 delete-file rewrite 정책
+- Quality (P4): freshness SLA·gap·순서역전·NULL/0·schema-drift 규칙 + 알림 graceful degrade
+  (`test_quality_rules.py`, `test_quality_alert.py` — 순수 함수, Spark 無)
 
 ## 향후 추가하면 좋은 테스트
 
