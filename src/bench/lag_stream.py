@@ -119,6 +119,10 @@ def run(args: argparse.Namespace) -> None:
     )
     if args.max_offsets:
         reader = reader.option("maxOffsetsPerTrigger", str(args.max_offsets))
+    if args.min_partitions:
+        # 단일 Kafka 파티션의 오프셋 범위를 N개 Spark 태스크로 쪼개 읽기 병렬성 확보
+        # (토픽 파티션·replay 키 변경 없이). 소비가 병목일 때 드레인이 빨라진다.
+        reader = reader.option("minPartitions", str(args.min_partitions))
 
     parsed = (
         reader.load()
@@ -150,6 +154,7 @@ def main() -> None:
     p.add_argument("--trigger", default="0 seconds", help="processingTime 트리거")
     p.add_argument("--max-offsets", type=int, default=None, help="maxOffsetsPerTrigger")
     p.add_argument("--shuffle-parts", type=int, default=None, help="shuffle.partitions(병렬성)")
+    p.add_argument("--min-partitions", type=int, default=None, help="Kafka 읽기 병렬성(minPartitions)")
     p.add_argument("--duration", type=int, default=60, help="측정 시간(초)")
     p.add_argument("--starting-offsets", default="latest", help="earliest|latest")
     p.add_argument("--bootstrap", default=KAFKA_BOOTSTRAP)

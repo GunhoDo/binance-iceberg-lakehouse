@@ -42,6 +42,8 @@ data.binance.vision 2024-01 BTCUSDT trades (실데이터)
 | baseline | 트리거 5s · 배치 5000 | 15.40s | **25.61s** | 26.01s | 26.11s | 868/s |
 | +trigger | 트리거 **0s** · 배치 5000 | 9.27s | **12.89s** | 13.29s | 13.53s | 1,918/s |
 | +batch | 0s · 배치 **30000** | 9.06s | 13.56s | 13.96s | 14.20s | 2,113/s |
+| +parallel(4) | 0s · 배치 30000 · minPartitions **4** | 17.25s | 21.75s | 22.15s | 22.47s | 1,335/s |
+| +parallel(8) | 0s · 배치 30000 · minPartitions **8** | 9.31s | 13.81s | 14.22s | 14.45s | 2,076/s |
 
 ### 레버별 기여도 분해
 
@@ -49,7 +51,14 @@ data.binance.vision 2024-01 BTCUSDT trades (실데이터)
   baseline의 병목은 5초 트리거 대기였고, 이를 제거한 것이 개선의 거의 전부다.
 - **+batch는 lag를 줄이지 못함(오히려 +0.67s), throughput만 +10%**: 30,000건을 한 배치로 읽으면
   먼저 도착한 레코드가 배치 전체 처리를 기다려 **tail latency가 개선되지 않는다.** 처리량은 향상.
-- **결론**: tail lag는 **트리거 정책이 지배**한다. 배치 확대는 처리량 레버이지 lag 레버가 아니다.
+- **읽기 병렬성(minPartitions)은 이 조건에서 lag를 개선하지 못함 (negative result)**: mp=8은
+  +batch와 사실상 동일(13.81 vs 13.56s), mp=4는 오히려 악화(21.75s, 단일 런 변동성 추정). 이유:
+  (1) inject-then-drain에서 lag는 **주입 창(10초)이 지배**해 드레인 가속의 효과가 가려짐,
+  (2) 30k 파싱+append는 CPU/읽기 병목이 아니라 병렬화 이득 < 태스크·다중파일 오버헤드,
+  (3) 진짜 읽기 병렬성은 단일 파티션 쪼개기가 아니라 **다중 파티션 + replay 키 분산**이 필요한데
+  현재 replay는 `key=symbol`이라 한 파티션에 몰린다.
+- **결론**: tail lag는 **트리거 정책이 지배**한다. 배치·병렬성은 이 워크로드/모델에서 lag 레버가
+  아니다(각각 throughput 레버 / 효과 없음). "안 통한 레버"를 지우지 않고 그대로 기록한다.
 
 ### 헤드라인
 
@@ -83,7 +92,11 @@ python src/bench/lag_report.py
   포함되지 않으며(=벤치가 더 깨끗), 프로덕션 S3 수치는 다를 수 있다. ablation 방법론은 동일.
 - **inject-then-drain 모델**: lag에 큐 대기가 포함된다. steady-state(동시 주입+소비) 수치와
   다를 수 있으나, 고정 백로그 비교로는 공정하다.
-- **병렬성 레버 제외**: topic 파티션이 1개라 이 append 파이프라인에서 shuffle 병렬성은
-  효과가 없어 정직하게 제외했다. 파티션 확대는 별도 실험 대상.
+- **읽기 병렬성은 측정했으나 효과 없음**: `minPartitions`로 단일 Kafka 파티션을 쪼개도 이
+  워크로드에선 lag가 개선되지 않았다(§3 negative result). 유의미한 읽기 병렬성은 **다중
+  파티션 + replay 키 분산 + 소비가 병목인 고부하**에서만 나타날 것으로, 별도 실험 대상이다.
+  (`shuffle.partitions`는 이 stateless append에 shuffle이 없어 애초에 무효.)
+- **단일 런 변동성**: 각 config는 1회 측정이라 런 간 노이즈가 있다(+parallel(4) 이상치 추정).
+  수치를 확정하려면 config별 다회 반복 + 중앙값 집계가 필요하다.
 - **환경 메모**: aarch64 openjdk-17에서 `percentile_approx` whole-stage codegen이 SIGSEGV를
   내는 사례가 있어 리포트 세션은 codegen을 끈다(`src/bench/lag_report.py`).
