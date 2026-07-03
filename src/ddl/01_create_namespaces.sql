@@ -1,26 +1,17 @@
 -- 01_create_namespaces.sql
 --
--- 네임스페이스 생성. catalog 이름과 namespace 구분 정책은 Phase 1에서 결정한다.
--- (decisions.md D8 참조 — Hadoop / Hive / Glue 중 무엇을 쓸지에 따라 SQL이 달라짐)
+-- 네임스페이스(= Glue database) 정책.
 --
--- 본 프로젝트가 사용하는 논리적 zone:
---   raw       : raw_trades, raw_klines, raw_orders
+-- 결정(decisions.md D8): 단일 database `binance_lakehouse` 안에 모든 테이블을 두고,
+-- 레이어는 테이블 이름 prefix로 구분한다 (raw_/processed_/staging_/serving_/ops_).
+-- Glue database는 콘솔/IaC로 생성하므로 별도 CREATE NAMESPACE SQL은 두지 않는다.
+--
+-- 논리적 zone ↔ 테이블:
+--   raw       : raw_trades, raw_klines, raw_orders                 (plain Parquet, Iceberg 아님)
 --   processed : processed_trades, processed_klines, processed_orders
+--   staging   : staging_klines, staging_orders
 --   serving   : market_hourly_summary, order_execution_summary
---   ops       : data_quality_summary, pipeline_run_summary, table_health_summary
+--   ops       : data_quality_summary, pipeline_run_summary, table_health_summary, quality_events
 --
--- 위 zone을 namespace 단위로 나눌지, 단일 namespace에서 prefix로 구분할지
--- 결정한 뒤 본 파일을 채운다.
-
--- TODO Phase 1
--- CREATE NAMESPACE IF NOT EXISTS <catalog>.<zone>;
--- ----------------------------------------------------------------------------
--- raw_trades
--- ----------------------------------------------------------------------------
-
--- 01_create_namespaces.sql
---
--- 단일 데이터베이스 안에 모든 테이블을 둔다.
--- 레이어 구분은 테이블 이름 prefix로 한다 (raw_, processed_, serving_, ops_).
---
--- glue에서 create database로 만든다 sql문은 필요없다
+-- 로컬 벤치(hadoop catalog)는 `local.bench` 네임스페이스를 코드에서 생성한다
+-- (src/bench/lag_stream.py, src/quality/quality_scan.py).
