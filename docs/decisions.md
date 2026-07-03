@@ -602,6 +602,46 @@ Phase 3 window 기반 job은 `start_ts <= event_time < end_ts` 조건으로 처�
 
 ---
 
+## D21. WebSocket ingestor는 CSV 리플레이와 동일한 문자열 스키마로 방출한다
+
+### 결정
+
+`infra/ws_to_kafka.py`(실시간 WebSocket 프로듀서)는 `trades`/`klines` 토픽 레코드의
+**공통 필드를 `infra/csv_to_kafka.py`(통제 리플레이 프로듀서)와 동일한 문자열 타입**으로
+방출한다. WS 전용 메타 필드(`event_type`, `exchange_event_time`, `ingest_time`, `source`,
+`is_closed`)만 native 타입을 유지한다.
+
+### 이유
+
+두 프로듀서(리플레이=벤치 부하, WebSocket=실시간)가 **하나의 downstream**을 공유하기
+때문이다(PRD v2 소스 이원화). downstream(`01_build_processed_trades.py`,
+`02_build_processed_klines.py`)은 `from_json`을 **전부 StringType**으로 선언하고,
+- trades: `is_buyer_maker`/`is_best_match`를 `== "True"` **문자열 비교**로 bool 변환
+- klines: `open_time`/`close_time`/`number_of_trades`를 파싱 후 `cast("long")`
+
+한다. WS의 JSON 원시 타입(int id/time, bool flag)을 그대로 흘리면:
+- `is_buyer_maker`(JSON `true`)가 `== "True"`와 불일치 → **조용히 전부 false로 오염**(에러 없음)
+- 정수 필드는 StringType 파싱이 버전 의존적으로 `null`이 될 위험
+
+이는 "에러 없이 잘못된 데이터가 쌓이는" silent 정합성 결함이다. `str(True) == "True"`이므로
+공통 필드를 stringify하면 CSV·WS가 **동일 downstream을 무수정으로 통과**하고, 리플레이/라이브가
+구분 없이 처리된다(D12/D13 파싱 규약과 일관).
+
+### boolean 토큰 확정 (실측)
+
+실제 Binance 월별/일별 trades CSV의 `is_buyer_maker`/`is_best_match` 컬럼은 **대문자
+`"True"`/`"False"`**를 쓴다(`data.binance.vision`의 `BTCUSDT-trades-2024-01-01` 샘플로 확인).
+downstream의 `== "True"` 비교, CSV 원본, WS의 `str(bool)`(→`"True"`)이 **셋 다 일치**하므로
+CSV 경로에 잠재 결함은 없고 downstream 변경도 불필요하다.
+
+### 재검토 시점
+
+- 라이브 kline의 미확정 캔들(`is_closed=false`) 업데이트를 downstream이 확정 캔들과 구분해야
+  할 때(D13 `is_closed` 처리 재검토와 연동).
+- lag 계측(P2)에서 `exchange_event_time`을 별도 스키마로 파싱하기 시작할 때.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.

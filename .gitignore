@@ -24,6 +24,7 @@ data/samples/
 warehouse/
 checkpoints/
 spark-warehouse/
+.bench_warehouse/
 
 # --- 비밀 / 환경 ---
 .env

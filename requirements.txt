@@ -19,6 +19,9 @@
 # Phase 0
 kafka-python-ng
 
+# Phase 0 — Binance 공개 WebSocket 실시간 수집 (infra/ws_to_kafka.py)
+websocket-client
+
 # Phase 1
 pyspark==3.5.5
 
