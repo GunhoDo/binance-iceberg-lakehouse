@@ -1,0 +1,144 @@
+{
+  "uid": "pipeline-runs",
+  "title": "Pipeline Run Status",
+  "tags": ["pipeline", "airflow", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Succeeded Tasks (30d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(*) AS succeeded FROM pipeline_run_summary WHERE UPPER(status) IN ('SUCCESS', 'SUCCEEDED') AND created_at >= (SELECT MAX(created_at) - INTERVAL '30' DAY FROM pipeline_run_summary)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Failed Tasks (30d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(*) AS failed FROM pipeline_run_summary WHERE UPPER(status) IN ('FAILED', 'FAILURE', 'ERROR') AND created_at >= (SELECT MAX(created_at) - INTERVAL '30' DAY FROM pipeline_run_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Success Rate (%) (30d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT CAST(SUM(CASE WHEN UPPER(status) IN ('SUCCESS', 'SUCCEEDED') THEN 1 ELSE 0 END) AS DOUBLE) / COUNT(*) * 100 AS success_rate FROM pipeline_run_summary WHERE created_at >= (SELECT MAX(created_at) - INTERVAL '30' DAY FROM pipeline_run_summary)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 90 },
+              { "color": "green", "value": 99 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Avg Task Duration (s) (30d)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT AVG(duration_sec) AS avg_duration FROM pipeline_run_summary WHERE created_at >= (SELECT MAX(created_at) - INTERVAL '30' DAY FROM pipeline_run_summary)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Succeeded / Failed Tasks over Time",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT created_at AS time, SUM(CASE WHEN UPPER(status) IN ('SUCCESS', 'SUCCEEDED') THEN 1 ELSE 0 END) AS succeeded, SUM(CASE WHEN UPPER(status) IN ('FAILED', 'FAILURE', 'ERROR') THEN 1 ELSE 0 END) AS failed FROM pipeline_run_summary WHERE created_at >= (SELECT MAX(created_at) - INTERVAL '30' DAY FROM pipeline_run_summary) GROUP BY created_at ORDER BY created_at"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Task Duration by Task",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT created_at AS time, task_name, duration_sec FROM pipeline_run_summary WHERE created_at >= (SELECT MAX(created_at) - INTERVAL '30' DAY FROM pipeline_run_summary) ORDER BY created_at, task_name"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Recent Pipeline Runs",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT created_at, pipeline_name, task_name, status, duration_sec, processed_rows, target_table, error_message, run_id FROM pipeline_run_summary ORDER BY created_at DESC LIMIT 100"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 }
+    }
+  ]
+}

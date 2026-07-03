@@ -1,0 +1,119 @@
+{
+  "uid": "streaming-lag",
+  "title": "Streaming End-to-End Lag",
+  "tags": ["lag", "streaming", "benchmark", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "p50 Lag (latest run, s)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT approx_percentile(lag_ms, 0.5) / 1000.0 AS p50_s FROM lag_samples WHERE run_id = (SELECT run_id FROM lag_samples ORDER BY commit_ts DESC LIMIT 1)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "p95 Lag (latest run, s)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT approx_percentile(lag_ms, 0.95) / 1000.0 AS p95_s FROM lag_samples WHERE run_id = (SELECT run_id FROM lag_samples ORDER BY commit_ts DESC LIMIT 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 15 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "p99 Lag (latest run, s)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT approx_percentile(lag_ms, 0.99) / 1000.0 AS p99_s FROM lag_samples WHERE run_id = (SELECT run_id FROM lag_samples ORDER BY commit_ts DESC LIMIT 1)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Throughput (latest run, msg/s)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT COUNT(*) / ((MAX(commit_ts) - MIN(produce_ts)) / 1000.0) AS throughput_per_s FROM lag_samples WHERE run_id = (SELECT run_id FROM lag_samples ORDER BY commit_ts DESC LIMIT 1)"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Lag Percentiles over Time (latest run)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT from_unixtime(commit_ts / 1000) AS time, approx_percentile(lag_ms, 0.5) / 1000.0 AS p50, approx_percentile(lag_ms, 0.95) / 1000.0 AS p95, approx_percentile(lag_ms, 0.99) / 1000.0 AS p99 FROM lag_samples WHERE run_id = (SELECT run_id FROM lag_samples ORDER BY commit_ts DESC LIMIT 1) GROUP BY from_unixtime(commit_ts / 1000) ORDER BY time"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Ablation by Config (p50/p95/p99 · throughput)",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSQL": "SELECT config_label, COUNT(*) AS samples, approx_percentile(lag_ms, 0.5) / 1000.0 AS p50_s, approx_percentile(lag_ms, 0.95) / 1000.0 AS p95_s, approx_percentile(lag_ms, 0.99) / 1000.0 AS p99_s, MAX(lag_ms) / 1000.0 AS max_s, COUNT(*) / ((MAX(commit_ts) - MIN(produce_ts)) / 1000.0) AS throughput_per_s FROM lag_samples GROUP BY config_label ORDER BY p95_s"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 15 }
+    }
+  ]
+}

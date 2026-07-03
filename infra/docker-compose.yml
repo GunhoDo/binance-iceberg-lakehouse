@@ -122,6 +122,12 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_PLUGINS_PREINSTALL: grafana-athena-datasource
       GF_USERS_DEFAULT_THEME: dark
+      # P5 알림 연동 — provisioning/alerting/contact-points.yaml가 이 값을 확장한다.
+      # 주의: Grafana는 discord contact point에 '비어있지 않은' webhook url을 요구하며,
+      # 빈 값이면 provisioning 전체가 실패해 Grafana가 기동하지 못한다(검증됨). 따라서
+      # 미설정 시 placeholder를 넘겨 검증만 통과시키고, 실제 전송은 조용히 실패하게 한다
+      # (= 진짜 graceful: 알림만 안 가고 Grafana·대시보드는 정상).
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-https://discord.com/api/webhooks/000000000000000000/PLACEHOLDER_SET_DISCORD_WEBHOOK_URL_TO_ENABLE}
     volumes:
       - grafana_data:/var/lib/grafana
       - ../dashboard/grafana/provisioning:/etc/grafana/provisioning
