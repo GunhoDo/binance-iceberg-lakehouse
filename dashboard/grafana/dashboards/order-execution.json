@@ -153,10 +153,48 @@
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT summary_hour, symbol, total_orders, filled_orders, canceled_orders, fill_rate, cancel_rate, avg_fill_delay_sec, avg_order_qty, avg_filled_qty, total_order_qty, total_filled_qty, updated_at FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour DESC LIMIT 100"
+          "rawSQL": "SELECT summary_hour, symbol, total_orders, filled_orders, canceled_orders, fill_rate, cancel_rate, avg_fill_delay_sec, avg_order_qty, avg_filled_qty, total_order_qty, total_filled_qty, benchmark_vwap, avg_buy_fill_price, avg_sell_fill_price, buy_slippage_bps, sell_slippage_bps, slippage_cost_quote, updated_at FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour DESC LIMIT 100"
         }
       ],
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Slippage vs VWAP (bps) — Buy / Sell",
+      "description": "양수 = 벤치마크(VWAP) 대비 유리. 방향 분리(부호 상쇄 방지). 0 주변으로 퇴화하지 않고 변동성과 상관하면 anchor≠benchmark 가 지켜진 것.",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT summary_hour AS time, buy_slippage_bps, sell_slippage_bps FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "axisLabel": "bps" } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Slippage Cost (quote)",
+      "description": "Σ filled_qty × 방향보정 가격차. 양수 = 순유리(절감), 음수 = 순비용.",
+      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT summary_hour AS time, CAST(slippage_cost_quote AS DOUBLE) AS slippage_cost_quote FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 }
     }
   ]
 }

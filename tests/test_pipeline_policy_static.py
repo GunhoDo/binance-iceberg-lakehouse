@@ -97,6 +97,51 @@ class DailyWindowPolicyTests(unittest.TestCase):
         self.assertIn("date_trunc('hour', created_at) AS summary_hour", order_source)
         self.assertIn("date_trunc('hour', p.created_at) = keys.summary_hour", order_source)
 
+    def test_order_execution_summary_has_direction_split_slippage(self) -> None:
+        source = assert_valid_python(self, "src/jobs/daily/07_build_order_execution_summary_window.py")
+
+        # 방향 분리 체결가중 평균 체결가 (FILLED 만)
+        self.assertIn("avg_buy_fill_price", source)
+        self.assertIn("avg_sell_fill_price", source)
+        self.assertIn("p.side = 'BUY'", source)
+        self.assertIn("p.side = 'SELL'", source)
+        self.assertIn("p.order_status = 'FILLED'", source)
+        self.assertIn("p.filled_qty * p.avg_fill_price", source)
+
+        # 벤치마크 = market_hourly_summary.vwap 조인 (순환 방지: 다른 시계열)
+        self.assertIn("MARKET_HOURLY_SUMMARY", source)
+        self.assertIn("m.vwap AS benchmark_vwap", source)
+        self.assertIn("LEFT JOIN {MARKET_HOURLY_SUMMARY} m", source)
+
+        # 방향 분리 slippage_bps (양수=유리), 부호 규약이 BUY/SELL 대칭
+        self.assertIn(
+            "(m.vwap - o.avg_buy_fill_price) / NULLIF(m.vwap, 0) * 10000 AS buy_slippage_bps",
+            source,
+        )
+        self.assertIn(
+            "(o.avg_sell_fill_price - m.vwap) / NULLIF(m.vwap, 0) * 10000 AS sell_slippage_bps",
+            source,
+        )
+        self.assertIn("AS slippage_cost_quote", source)
+
+        # MERGE 가 신규 슬리피지 컬럼을 갱신
+        for col in [
+            "benchmark_vwap",
+            "avg_buy_fill_price",
+            "avg_sell_fill_price",
+            "buy_slippage_bps",
+            "sell_slippage_bps",
+            "slippage_cost_quote",
+        ]:
+            self.assertIn(f"target.{col} = source.{col}", source)
+
+    def test_dag_order_summary_runs_after_market_summary(self) -> None:
+        source = assert_valid_python(self, "orchestration/dags/daily_lakehouse_pipeline.py")
+        # 07 이 vwap 벤치마크를 조인하므로 06 이후 실행돼야 한다 (X-3)
+        self.assertIn(
+            "build_market_hourly_summary >> build_order_execution_summary", source
+        )
+
     def test_data_quality_job_uses_windowed_queries(self) -> None:
         source = assert_valid_python(self, "src/jobs/daily/08_check_data_quality.py")
 
