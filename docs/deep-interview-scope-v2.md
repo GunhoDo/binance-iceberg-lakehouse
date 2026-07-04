@@ -54,16 +54,19 @@
 - 대용량 "저장" 자랑 (핵심은 저장량이 아니라 lag 최적화 수치)
 
 ## Acceptance Criteria
-- [ ] Binance WebSocket ingestor가 aggTrade/kline을 이벤트 타입별 Kafka 토픽으로 발행(재연결·백오프 포함)
-- [ ] 통제된 리플레이 하니스: 과거 덤프를 "정확히 초당 N건"으로 재생, 동일 조건 재실행 가능
-- [ ] end-to-end lag 계측 코드: event_time→kafka→spark→iceberg commit 각 구간 타임스탬프 기록, p50/p95/p99 산출
-- [ ] ablation 벤치마크: baseline → +트리거/배치 튜닝 → +쓰기(커밋) 경로 → +병렬성 순으로 각 단계 p95 lag·throughput을 표로 기록
-- [ ] 최종 산출: "동일 부하 N msg/s에서 p95 lag X초 → Y초 (Z% 감소)" + 레버별 기여도 표
-- [ ] 데이터 품질 이상탐지: freshness SLA 위반·gap(결측 캔들)·스키마 드리프트·순서역전·NULL/0 감지 → `anomaly`/`quality_events` 적재
-- [ ] lag 지표가 freshness SLA 이상탐지로 연결(임계 초과 시 알람)
-- [ ] Grafana 대시보드: end-to-end lag(p50/p95/p99), 토픽 적체, 이상 건수, 잡 성공/실패
-- [ ] 운영 가시성: 잡 실행 이력·에러가 관측 테이블 + 대시보드로 남고, 알림 채널(Discord webhook 등, graceful degrade) 연동
-- [ ] 벤치마크 재현성: 리플레이·튜닝 파라미터가 커밋되어 제3자가 동일 결과 재생 가능
+
+> ✅ **전 항목 delivered (P0~P5, `prd-v2`).** 실측 근거: 벤치마크 수치는 `docs/benchmark_lag.md`, 품질 이상탐지는 `docs/data_quality.md`, 소스는 `infra/ws_to_kafka.py`·`infra/replay_harness.py`·`src/bench/`·`src/quality/` 참조.
+
+- [x] Binance WebSocket ingestor가 aggTrade/kline을 이벤트 타입별 Kafka 토픽으로 발행(재연결·백오프 포함)
+- [x] 통제된 리플레이 하니스: 과거 덤프를 "정확히 초당 N건"으로 재생, 동일 조건 재실행 가능
+- [x] end-to-end lag 계측 코드: event_time→kafka→spark→iceberg commit 각 구간 타임스탬프 기록, p50/p95/p99 산출
+- [x] ablation 벤치마크: baseline → +트리거/배치 튜닝 → +쓰기(커밋) 경로 → +병렬성 순으로 각 단계 p95 lag·throughput을 표로 기록
+- [x] 최종 산출: "동일 부하 N msg/s에서 p95 lag X초 → Y초 (Z% 감소)" + 레버별 기여도 표
+- [x] 데이터 품질 이상탐지: freshness SLA 위반·gap(결측 캔들)·스키마 드리프트·순서역전·NULL/0 감지 → `anomaly`/`quality_events` 적재
+- [x] lag 지표가 freshness SLA 이상탐지로 연결(임계 초과 시 알람)
+- [x] Grafana 대시보드: end-to-end lag(p50/p95/p99), 토픽 적체, 이상 건수, 잡 성공/실패
+- [x] 운영 가시성: 잡 실행 이력·에러가 관측 테이블 + 대시보드로 남고, 알림 채널(Discord webhook 등, graceful degrade) 연동
+- [x] 벤치마크 재현성: 리플레이·튜닝 파라미터가 커밋되어 제3자가 동일 결과 재생 가능
 
 ## Assumptions Exposed & Resolved
 | Assumption | Challenge | Resolution |
