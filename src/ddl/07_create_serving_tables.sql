@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.market_hourly_summary (
     trade_qty                DECIMAL(30, 8),
     trade_quote_qty          DECIMAL(30, 8),
     avg_trade_price          DECIMAL(20, 8),
+    vwap                     DECIMAL(20, 8),
     maker_trade_count        BIGINT,
     taker_trade_count        BIGINT,
 
