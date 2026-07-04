@@ -67,4 +67,11 @@ for path in jars_dir.glob("*wildfly*"):
     print(path)
 PY
 
+# JAVA_HOME 을 아키텍처에 맞게 재설정한다. 위의 하드코딩된 -amd64 경로는 arm64(Apple
+# Silicon 등)에서 존재하지 않아 spark-submit 이 java 를 못 찾는다. 실제 java 위치를 따라가
+# /opt/java 심링크로 고정하면 amd64/arm64 모두에서 동작한다. (끝에 두어 jar 캐시 보존)
+RUN ln -sf "$(dirname "$(dirname "$(readlink -f "$(which java)")")")" /opt/java
+ENV JAVA_HOME=/opt/java
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
 CMD ["tail", "-f", "/dev/null"]
