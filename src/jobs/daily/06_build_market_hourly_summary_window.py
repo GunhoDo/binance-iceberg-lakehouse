@@ -72,6 +72,7 @@ def run() -> None:
                 CAST(sum(t.qty) AS DECIMAL(30, 8)) AS trade_qty,
                 CAST(sum(t.quote_qty) AS DECIMAL(30, 8)) AS trade_quote_qty,
                 CAST(avg(t.price) AS DECIMAL(20, 8)) AS avg_trade_price,
+                CAST(sum(t.quote_qty) / NULLIF(sum(t.qty), 0) AS DECIMAL(20, 8)) AS vwap,
 
                 CAST(sum(CASE WHEN t.is_buyer_maker = true THEN 1 ELSE 0 END) AS BIGINT) AS maker_trade_count,
                 CAST(sum(CASE WHEN t.is_buyer_maker = false THEN 1 ELSE 0 END) AS BIGINT) AS taker_trade_count
@@ -98,6 +99,7 @@ def run() -> None:
             t.trade_qty AS trade_qty,
             t.trade_quote_qty AS trade_quote_qty,
             t.avg_trade_price AS avg_trade_price,
+            t.vwap AS vwap,
             t.maker_trade_count AS maker_trade_count,
             t.taker_trade_count AS taker_trade_count,
 
@@ -129,6 +131,7 @@ def run() -> None:
             target.trade_qty = source.trade_qty,
             target.trade_quote_qty = source.trade_quote_qty,
             target.avg_trade_price = source.avg_trade_price,
+            target.vwap = source.vwap,
             target.maker_trade_count = source.maker_trade_count,
             target.taker_trade_count = source.taker_trade_count,
             target.updated_at = source.updated_at

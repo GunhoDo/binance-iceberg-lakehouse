@@ -123,10 +123,47 @@
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT summary_hour, symbol, open_price, high_price, low_price, close_price, kline_volume, kline_quote_volume, kline_number_of_trades, trade_count, trade_qty, trade_quote_qty, avg_trade_price, maker_trade_count, taker_trade_count, updated_at FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour DESC LIMIT 100"
+          "rawSQL": "SELECT summary_hour, symbol, open_price, high_price, low_price, close_price, kline_volume, kline_quote_volume, kline_number_of_trades, trade_count, trade_qty, trade_quote_qty, avg_trade_price, vwap, maker_trade_count, taker_trade_count, updated_at FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour DESC LIMIT 100"
         }
       ],
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "VWAP vs Average Trade Price (benchmark)",
+      "description": "vwap = Σ(quote_qty)/NULLIF(Σ(qty),0) (거래량 가중). avg_trade_price 는 단순 평균. 두 선의 괴리는 대량 체결이 가격의 어느 쪽에 몰렸는지를 보여준다. VWAP 은 슬리피지 벤치마크의 기준선.",
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 0,
+          "rawSQL": "SELECT summary_hour AS time, CAST(vwap AS DOUBLE) AS vwap, CAST(avg_trade_price AS DOUBLE) AS avg_trade_price FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "vwap" },
+            "properties": [
+              { "id": "displayName", "value": "VWAP (benchmark)" },
+              { "id": "custom.lineWidth", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_trade_price" },
+            "properties": [
+              { "id": "displayName", "value": "Avg Trade Price" },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 4] } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 }
     }
   ]
 }
