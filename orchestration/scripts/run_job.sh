@@ -50,7 +50,7 @@ spark-submit \
   --conf "spark.sql.catalog.glue.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog" \
   --conf "spark.sql.catalog.glue.warehouse=s3://binance-iceberg-lake/warehouse" \
   --conf "spark.sql.catalog.glue.io-impl=org.apache.iceberg.aws.s3.S3FileIO" \
-  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.InstanceProfileCredentialsProvider" \
+  --conf "spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.DefaultAWSCredentialsProviderChain" \
   --conf "spark.sql.parquet.enableVectorizedReader=false" \
   --conf "spark.sql.iceberg.vectorization.enabled=false" \
   --conf "spark.sql.shuffle.partitions=2" \

@@ -148,8 +148,15 @@ services:
       PYTHONPATH: /workspace
       PYSPARK_PYTHON: /usr/local/bin/python
       PYSPARK_DRIVER_PYTHON: /usr/local/bin/python
+      # 로컬은 마운트된 ~/.aws 프로필 사용, EC2는 instance profile 사용(둘 다 기본 체인이 처리).
+      # region 은 로컬에 EC2 메타데이터가 없으므로 명시한다. 필요 시 .env 로 override.
+      AWS_REGION: "${AWS_REGION:-ap-northeast-2}"
+      AWS_DEFAULT_REGION: "${AWS_REGION:-ap-northeast-2}"
+      AWS_PROFILE: "${AWS_PROFILE:-default}"
     volumes:
       - ..:/workspace
+      # 로컬 aws configure 자격을 컨테이너에 읽기전용 마운트 (EC2에선 파일이 없어도 무해).
+      - ${HOME}/.aws:/root/.aws:ro
     profiles: ["airflow"]
     networks:
       - lakehouse

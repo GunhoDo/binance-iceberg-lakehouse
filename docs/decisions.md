@@ -830,6 +830,47 @@ Phase G/A/X의 실데이터 검증(스키마 ALTER, 백필 MERGE, fixture export
 
 ---
 
+## D26. (v3) Spark s3a 자격을 InstanceProfile 고정에서 기본 체인으로 전환
+
+### 결정
+
+`run_job.sh`·`run_spark_sql.sh`의 `spark.hadoop.fs.s3a.aws.credentials.provider`를
+`InstanceProfileCredentialsProvider`(EC2 전용)에서 **`DefaultAWSCredentialsProviderChain`**으로
+바꾼다. 또한 `spark-runner` 컨테이너에 로컬 `~/.aws`를 읽기전용 마운트하고 `AWS_REGION`/`AWS_PROFILE`
+env를 준다. 이로써 **로컬은 `aws configure` 프로필**, **EC2는 instance profile**로 같은 코드가 동작한다.
+
+### 배경 (전환 전 상태)
+
+자격 경로가 두 갈래였다.
+- **Iceberg S3FileIO + GlueCatalog**(`io-impl`): AWS SDK 기본 체인(env → `~/.aws` → instance) 사용.
+- **Hadoop `s3a://`**(raw parquet 01~03, 스트리밍 checkpoint): `InstanceProfileCredentialsProvider`로
+  고정 → EC2에서만 동작. 게다가 `spark-runner` 컨테이너에 자격/region이 주입되지 않아 로컬 실행이 불가했다.
+
+D25에서 "코드 경로(Spark job 런타임) 미검증"으로 남긴 원인이 이 자격 구조였다.
+
+### 이유
+
+- `DefaultAWSCredentialsProviderChain`은 env → system props → **프로필(`~/.aws`, `AWS_PROFILE` 존중)**
+  → EC2 instance 순으로 탐색한다. 따라서 로컬(프로필)과 EC2(instance profile) **양쪽 모두** 커버하는
+  strict improvement이며 EC2 회귀가 없다.
+- `bootstrap_ec2.sh`가 이미 `aws configure set`으로 프로필을 만들고 `EnvironmentVariableCredentialsProvider`
+  주석을 남겨둔 것에서, 프로필 기반 전환 의도가 원래 있었다.
+
+### 트레이드오프 / 주의
+
+- Glue는 region이 필요한데 로컬엔 EC2 메타데이터가 없으므로 `AWS_REGION`(기본 ap-northeast-2)을 env로
+  명시한다. `.env`로 override 가능.
+- `~/.aws` 마운트 경로가 EC2 호스트에 없으면 docker가 빈 디렉터리를 만들지만, 기본 체인이 instance
+  profile로 폴백하므로 무해하다.
+- 컨테이너에 자격 파일을 마운트하므로, 최소 권한 프로필 사용을 권장한다(현재 `dogun-user`).
+
+### 재검토 시점
+
+- k3d(Phase K)로 옮기며 IRSA/ServiceAccount 기반 자격으로 재구성할 때.
+- 프로덕션에서 장기 키 대신 STS/AssumeRole 단기 자격으로 전환할 때.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
