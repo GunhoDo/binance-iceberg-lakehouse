@@ -646,6 +646,190 @@ CSV 경로에 잠재 결함은 없고 downstream 변경도 불필요하다.
 
 ---
 
+## D22. (v3 / Phase G) VWAP을 서빙 컬럼으로 물질화
+
+### 결정
+
+`market_hourly_summary`에 시간당 **VWAP**(거래량 가중 평균가)을 저장 컬럼으로 추가한다.
+
+```sql
+vwap = Σ(quote_qty) / NULLIF(Σ(qty), 0)   -- processed_trades 를 summary_hour 로 집계
+```
+
+신규 설치는 `07_create_serving_tables.sql` baseline CREATE에 포함하고, 기존 테이블은
+`10_add_vwap_market_hourly_summary.sql`의 `ALTER ... ADD COLUMN vwap ... AFTER avg_trade_price`로
+마이그레이션한다(Iceberg 메타데이터 전용, 재작성 없음). `06` job은 CTE·최종 SELECT·MERGE UPDATE
+세 곳에 반영한다.
+
+### 대안
+
+- 쿼리 시점마다 뷰/서브쿼리로 VWAP 산출 — 저장하지 않음.
+- avg_trade_price(단순 평균)로 대체.
+
+### 이유
+
+- VWAP은 Phase X 슬리피지의 **벤치마크 기준선**이므로, 매 조회마다 52M trades를 재집계하는 대신
+  시간당 1행으로 물질화하는 편이 서빙·조인 비용에서 유리하다.
+- 단순 평균(avg_trade_price)은 대량 체결 가중을 반영하지 못해 벤치마크로 부적합하다.
+- WS 수집(`infra/ws_to_kafka.py`)에서 aggTrade에 없는 `quote_qty`를 `price×qty`로 재구성해
+  넣으므로, VWAP = Σ(price×qty)/Σ(qty) = **정통 거래량 가중 평균가**와 정확히 일치한다(근사 없음).
+
+### 실데이터 검증 (2026-07-05, Athena)
+
+BTCUSDT 2024-01 744시간 백필 결과: 채움 744/744, `vwap ∈ [low_price, high_price]` 위반 0건,
+distinct 744(값 퇴화 없음), `corr(high−low, |vwap−avg_trade_price|)=0.46`(변동성이 클수록 가중·단순
+평균 괴리가 커짐 → VWAP이 실제 시장 미세구조를 반영).
+
+### 재검토 시점
+
+- 멀티심볼/멀티interval로 확장해 집계 조합이 늘 때.
+- VWAP 외 벤치마크(TWAP, arrival price)를 추가로 서빙할 때.
+
+---
+
+## D23. (v3 / Phase A) 시뮬레이터 실시장 앵커링 + 순환 방지 불변식
+
+### 결정
+
+합성 주문의 가격·도착을 실시장 분봉에 **앵커링**한다.
+
+- 주문 가격 기준점 = 주문 시각이 속한 **그 분(minute)의 close**(= 의사결정 시점 가격),
+  그 주변 `±PRICE_DEVIATION_RATE`(0.3%)에서 샘플링.
+- 주문 도착 = 분봉 **거래량 가중** 샘플링(`random.choices(buckets, weights=volumes)`).
+- 앵커 fixture는 `export_anchor_klines.py`로 `processed_klines`에서 추출(CSV: open_time_ms,close,volume),
+  `--anchor-klines`로 주입. provenance(`anchor_file`/`anchor_sha256`/`anchor_mode`)를
+  `simulated_parameters`에 기록.
+
+### 순환 방지 불변식 (이 결정의 핵심)
+
+**앵커 기준점 ≠ 벤치마크 기준점.** 앵커(가격이 붙는 기준)는 **분 close**이고, 슬리피지 벤치마크는
+다운스트림에서 시간당 집계하는 **interval VWAP**이다. 둘이 같은 시계열이면(예: interval VWAP에
+앵커링하고 같은 VWAP으로 슬리피지 측정) 기대 슬리피지가 **0으로 퇴화**하는 자기 파라미터 읽기가 된다.
+서로 다른 시계열이어야 슬리피지 분포가 0에 붙지 않고 구간 변동성과 상관을 가진다.
+
+### 정직한 포지셔닝
+
+앵커링은 **필요조건이지 충분조건이 아니다.** 앵커링을 해도 주문은 무작위 산포 합성 주문이므로,
+여기서 나오는 슬리피지는 "실행 스킬"이 아니라 **분포 통계**다. 정당한 용도는 (1) 파이프라인·지표의
+기계적 검증, (2) 실주문/전략 연결 시 그대로 쓸 인프라 선구축 두 가지뿐이며, "전략 성과 정량화"는
+실데이터 연결 이후에만 주장한다.
+
+### 대안
+
+- 고정 `--reference-close`(≈43000) 유지 — D20의 기존 방식. 시장과 무관한 상수라 슬리피지가
+  "상수 vs 실 VWAP 거리"만 측정하게 됨(D24의 gap 아티팩트 참조).
+- interval VWAP에 직접 앵커링 — 순환 발생으로 기각.
+
+### 트레이드오프 / 구현 메모
+
+- `--vol-linked-rates`(선택, 기본 off): 분 상대 거래량으로 부분체결/취소율 조정. 기본은 상수 유지.
+- `kafka` import를 `TYPE_CHECKING` + 지연 import로 돌려 Kafka 없이 순수 생성 로직을 단위 테스트
+  가능하게 함(`run()`은 순수 제너레이터 `iter_order_events`를 소비). 하위 호환: `--anchor-klines`
+  미지정 시 기존 고정-reference 동작 유지.
+
+### 실데이터 검증 (2026-07-05)
+
+실 fixture 44,640 버킷(2024-01)에 대해: 가격 편차 위반 0(전부 분 close ±0.3%),
+`corr(실거래량, 선택횟수)=0.55`(거래 몰린 분에 주문 더 도착), seed 재현성 해시 일치.
+
+### 재검토 시점
+
+- 실제 private order data 또는 더 정교한 arrival 모델(Poisson/Hawkes)로 교체할 때.
+- 멀티심볼 fixture로 확장할 때.
+
+---
+
+## D24. (v3 / Phase X) 방향 분리 슬리피지와 부호 규약
+
+### 결정
+
+`order_execution_summary`에 벤치마크(VWAP) 대비 슬리피지를 **BUY/SELL 분리**로 추가한다.
+
+```sql
+buy_slippage_bps  = (vwap - avg_buy_fill_price)  / NULLIF(vwap,0) * 10000   -- 양수=유리(싸게 매수)
+sell_slippage_bps = (avg_sell_fill_price - vwap) / NULLIF(vwap,0) * 10000   -- 양수=유리(비싸게 매도)
+slippage_cost_quote = Σ filled_qty × 방향보정 가격차                         -- 양수=순유리(quote)
+```
+
+`avg_buy/sell_fill_price`는 FILLED 주문의 **filled_qty 가중** 체결가. `benchmark_vwap`은
+`market_hourly_summary`를 `(summary_hour, symbol)`로 LEFT JOIN해서 가져온다. baseline DDL +
+`11_add_slippage_order_execution_summary.sql`(ALTER, `AFTER total_filled_qty`로 INSERT * 위치 정합).
+
+### 대안
+
+- 혼합 평균 한 컬럼(방향 무시) — BUY(음수 경향)와 SELL(양수 경향)이 **부호 상쇄**되어 정보를
+  잃으므로 기각(원 설계 §4.3 미결 사항을 분리로 확정).
+
+### 부수 결정
+
+- **X-3 DAG 엣지**: `build_market_hourly_summary >> build_order_execution_summary`. 07이 06의 vwap을
+  조인하므로 순서를 우연에 맡기지 않고 명시.
+- **X-4 서빙 뷰**: `execution_vs_market`은 Grafana가 Athena를 읽으므로 **Athena 뷰**로 생성하고
+  DDL을 `sql/`에 기록.
+- **X-5 알람**: `|슬리피지|>50bps` 임계 초과 알람(`execution` 그룹). 합성 데이터 기준 기계적 임계.
+
+### 순환 부재 / 정직성
+
+benchmark_vwap은 `market_hourly_summary`(시장 체결) 유래, 체결가는 `processed_orders`(주문 앵커=분
+close) 유래 — 서로 다른 시계열(D23 불변식이 여기서 결실). 다만 슬리피지 자체는 여전히 합성 주문의
+분포 통계다(D23 정직한 포지셔닝 계승).
+
+### 실데이터에서 관찰한 것 — "gap 아티팩트" (중요)
+
+현재 lakehouse의 `processed_orders` 9,000건은 **D23 앵커링 이전(구버전)** 데이터로, 고정
+`reference_close=43000`으로 생성됐다(`simulated_parameters`에 `anchor_mode` 없음). 이들로 슬리피지를
+계산하면(read-only 검증):
+
+- 공식·부호 규약은 **기계적으로 정확**(수기 대조 일치, 매수 음수/매도 양수 성립, 방향분리로 상쇄 방지).
+- 그러나 체결가가 ~43000에 뭉쳐 있고 실 VWAP은 42300~48000으로 흐르므로, 슬리피지가 **체결 타이밍이
+  아니라 "43000 고정값 vs 실 VWAP 거리"**로 결정된다(±100~180bps, vwap이 43000에서 멀수록 증가).
+
+이는 **D23 앵커링이 왜 필요한지를 실증**한다. misleading하므로 이 아티팩트 값은 **서빙 테이블에
+기록하지 않았고**, 스키마 ALTER와 뷰만 적용했다.
+
+### 남은 것 (X-6 백필)
+
+의미 있는 슬리피지는 **앵커 모드 재시뮬(D23) → Kafka → 01~07 재실행**이 필요하다. 이는 전체 스택
+기동을 요구하므로 별도 단계로 둔다.
+
+### 재검토 시점
+
+- 앵커링된 주문으로 재시뮬해 slippage_cost_quote의 절대 규모가 현실적 범위인지 확인할 때.
+- 실주문/전략 연결로 "분포 통계"에서 "실행 성과"로 성격이 바뀔 때.
+
+---
+
+## D25. (v3) v3 실데이터 검증을 Spark 스택 대신 Athena로 수행
+
+### 결정
+
+Phase G/A/X의 실데이터 검증(스키마 ALTER, 백필 MERGE, fixture export, 뷰 생성, 지표 확인)을
+로컬 Spark 스택(`spark-runner`) 대신 **Athena**로 수행했다.
+
+### 이유
+
+- `spark-runner` 컨테이너는 자격을 **EC2 InstanceProfile**에서 가져오도록 구성돼 있어(D17 실행 구조),
+  로컬 노트북에서는 이미지 빌드 + 컨테이너 자격 주입 + provider 교체가 필요해 무겁다.
+- Athena는 동일한 Glue 카탈로그·동일한 S3 Iceberg 테이블에 SQL을 직접 실행한다. `ALTER ... ADD COLUMNS`,
+  `MERGE INTO`, `CREATE VIEW`는 Iceberg 관점에서 Spark 실행과 **동등한 쓰기**다.
+
+### 트레이드오프 (정직성)
+
+- ✅ **데이터 결과는 검증됨**: 지표 값이 실데이터에서 타당함(범위·비퇴화·상관·부호).
+- ⚠️ **코드 경로는 미검증**: `06`/`07` job의 파이썬 코드 자체가 스택 위에서 도는 런타임(import,
+  window 인자, INSERT * 정합 등)은 확인하지 못했다. Athena는 job의 **SQL 로직을 손으로 옮겨** 돌린
+  것이지 job을 실행한 게 아니다. 이 런타임 검증은 EC2(정상 환경) 또는 로컬 spark-runner 기동으로 남긴다.
+- Athena가 `ADD COLUMNS`를 테이블 끝에 append하는 점(위치 지정 미지원)은 named-column MERGE로
+  우회했으므로 백필에는 영향 없다. 단, 실테이블 컬럼 순서가 baseline DDL과 달라질 수 있어 Spark
+  `INSERT *` 경로는 정상 환경에서 별도 확인이 필요하다.
+
+### 재검토 시점
+
+- EC2 또는 로컬 스택을 기동해 `src/jobs/daily/*.py`를 실제 실행하는 런타임 검증을 할 때.
+- k3d(Phase K)로 실행 환경을 옮겨 자격·카탈로그 접근 방식을 재구성할 때.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
