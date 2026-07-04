@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from src.jobs.common.args import parse_job_args
 from src.jobs.common.spark_session import get_spark
-from src.jobs.common.tables import PROCESSED_ORDERS, ORDER_EXECUTION_SUMMARY
+from src.jobs.common.tables import (
+    PROCESSED_ORDERS,
+    ORDER_EXECUTION_SUMMARY,
+    MARKET_HOURLY_SUMMARY,
+)
 
 
 def run() -> None:
@@ -58,7 +62,29 @@ def run() -> None:
                 CAST(avg(p.order_qty) AS DECIMAL(20, 8)) AS avg_order_qty,
                 CAST(avg(p.filled_qty) AS DECIMAL(20, 8)) AS avg_filled_qty,
                 CAST(sum(p.order_qty) AS DECIMAL(30, 8)) AS total_order_qty,
-                CAST(sum(p.filled_qty) AS DECIMAL(30, 8)) AS total_filled_qty
+                CAST(sum(p.filled_qty) AS DECIMAL(30, 8)) AS total_filled_qty,
+
+                -- Phase X: 방향 분리 체결가중 평균 체결가 (FILLED 주문만, filled_qty 가중)
+                CAST(
+                    sum(CASE WHEN p.order_status = 'FILLED' AND p.side = 'BUY'
+                             THEN p.filled_qty * p.avg_fill_price END)
+                    / NULLIF(sum(CASE WHEN p.order_status = 'FILLED' AND p.side = 'BUY'
+                             THEN p.filled_qty END), 0)
+                    AS DECIMAL(20, 8)
+                ) AS avg_buy_fill_price,
+                CAST(
+                    sum(CASE WHEN p.order_status = 'FILLED' AND p.side = 'SELL'
+                             THEN p.filled_qty * p.avg_fill_price END)
+                    / NULLIF(sum(CASE WHEN p.order_status = 'FILLED' AND p.side = 'SELL'
+                             THEN p.filled_qty END), 0)
+                    AS DECIMAL(20, 8)
+                ) AS avg_sell_fill_price,
+
+                -- 방향별 체결량 (slippage_cost_quote 금액 환산용)
+                CAST(sum(CASE WHEN p.order_status = 'FILLED' AND p.side = 'BUY'
+                         THEN p.filled_qty ELSE 0 END) AS DECIMAL(30, 8)) AS buy_filled_qty,
+                CAST(sum(CASE WHEN p.order_status = 'FILLED' AND p.side = 'SELL'
+                         THEN p.filled_qty ELSE 0 END) AS DECIMAL(30, 8)) AS sell_filled_qty
             FROM affected_summary_keys keys
             JOIN {PROCESSED_ORDERS} p
               ON date_trunc('hour', p.created_at) = keys.summary_hour
@@ -78,11 +104,29 @@ def run() -> None:
             o.avg_filled_qty AS avg_filled_qty,
             o.total_order_qty AS total_order_qty,
             o.total_filled_qty AS total_filled_qty,
+
+            -- Phase X: 벤치마크(VWAP) 대비 방향 분리 슬리피지 (양수=유리)
+            -- 순환 방지: benchmark_vwap 은 market_hourly_summary(시장 체결) 에서 오고,
+            -- 체결가는 processed_orders(주문 앵커=분 close 기반) 에서 온다. 서로 다른 시계열.
+            m.vwap AS benchmark_vwap,
+            o.avg_buy_fill_price AS avg_buy_fill_price,
+            o.avg_sell_fill_price AS avg_sell_fill_price,
+            (m.vwap - o.avg_buy_fill_price) / NULLIF(m.vwap, 0) * 10000 AS buy_slippage_bps,
+            (o.avg_sell_fill_price - m.vwap) / NULLIF(m.vwap, 0) * 10000 AS sell_slippage_bps,
+            CAST(
+                COALESCE(o.buy_filled_qty * (m.vwap - o.avg_buy_fill_price), 0)
+                + COALESCE(o.sell_filled_qty * (o.avg_sell_fill_price - m.vwap), 0)
+                AS DECIMAL(30, 8)
+            ) AS slippage_cost_quote,
+
             current_timestamp() AS updated_at
         FROM affected_summary_keys keys
         LEFT JOIN order_hourly o
           ON o.summary_hour = keys.summary_hour
          AND o.symbol = keys.symbol
+        LEFT JOIN {MARKET_HOURLY_SUMMARY} m
+          ON m.summary_hour = keys.summary_hour
+         AND m.symbol = keys.symbol
     """)
 
     spark.sql(f"""
@@ -102,6 +146,12 @@ def run() -> None:
             target.avg_filled_qty = source.avg_filled_qty,
             target.total_order_qty = source.total_order_qty,
             target.total_filled_qty = source.total_filled_qty,
+            target.benchmark_vwap = source.benchmark_vwap,
+            target.avg_buy_fill_price = source.avg_buy_fill_price,
+            target.avg_sell_fill_price = source.avg_sell_fill_price,
+            target.buy_slippage_bps = source.buy_slippage_bps,
+            target.sell_slippage_bps = source.sell_slippage_bps,
+            target.slippage_cost_quote = source.slippage_cost_quote,
             target.updated_at = source.updated_at
 
         WHEN NOT MATCHED THEN INSERT *

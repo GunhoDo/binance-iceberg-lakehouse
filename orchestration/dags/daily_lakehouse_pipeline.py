@@ -102,5 +102,8 @@ with DAG(
 
     build_staging_orders >> merge_processed_orders >> build_order_execution_summary
 
+    # Phase X: 07 이 market_hourly_summary.vwap 을 벤치마크로 조인하므로 06 이후에 실행돼야 한다.
+    build_market_hourly_summary >> build_order_execution_summary
+
     [build_market_hourly_summary, build_order_execution_summary] >> check_data_quality
     check_data_quality >> check_table_health

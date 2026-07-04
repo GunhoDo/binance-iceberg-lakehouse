@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS glue.binance_lakehouse.order_execution_summary (
     avg_filled_qty        DECIMAL(20, 8),
     total_order_qty       DECIMAL(30, 8),
     total_filled_qty      DECIMAL(30, 8),
+
+    -- Phase X: 방향 분리 슬리피지 (market_hourly_summary.vwap 벤치마크 대비, 양수=유리)
+    benchmark_vwap        DECIMAL(20, 8),
+    avg_buy_fill_price    DECIMAL(20, 8),
+    avg_sell_fill_price   DECIMAL(20, 8),
+    buy_slippage_bps      DOUBLE,
+    sell_slippage_bps     DOUBLE,
+    slippage_cost_quote   DECIMAL(30, 8),
+
     updated_at            TIMESTAMP
 )
 USING iceberg
