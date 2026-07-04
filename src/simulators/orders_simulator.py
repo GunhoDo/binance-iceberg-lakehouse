@@ -32,17 +32,34 @@ Iceberg MERGE 기반 주문 상태 관리 실험을 위해 synthetic order event
         --end-ts 2024-02-01T00:00:00Z \
       --order-id-prefix 202401 \
       --seed 42
+
+앵커 모드 (Phase A) — 실시장 분봉에 주문 가격을 앵커링:
+    python src/simulators/orders_simulator.py \
+      --bootstrap localhost:9092 \
+      --topic orders \
+      --num-orders 10000 \
+      --symbol BTCUSDT \
+      --anchor-klines fixtures/anchor_btcusdt_2024-01.csv \
+      --order-id-prefix 202401 \
+      --seed 42
+  앵커 fixture 는 src/simulators/export_anchor_klines.py 로 생성한다.
 """
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
+import io
 import json
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterator
 
-from kafka import KafkaProducer
+if TYPE_CHECKING:
+    from kafka import KafkaProducer
 
 
 # -----------------------------------------------------------------------------
@@ -60,7 +77,131 @@ MAX_QTY = 0.08
 
 PRICE_DEVIATION_RATE = 0.003
 MAX_LIFECYCLE_OFFSET_MS = 15_000
-# reference_close 기준 ±0.3% 범위에서 주문 가격 샘플링
+# reference_close(또는 앵커 분 close) 기준 ±0.3% 범위에서 주문 가격 샘플링
+
+MINUTE_MS = 60_000
+
+ANCHOR_MODE_KLINE = "kline_anchored"
+ANCHOR_MODE_FIXED = "fixed_reference"
+
+
+# -----------------------------------------------------------------------------
+# 실시장 앵커 (Phase A)
+# -----------------------------------------------------------------------------
+#
+# 순환 방지 불변식 (docs/gold_serving_improvement_plan.md §4.1.1):
+#   앵커 기준점(주문 가격이 붙는 기준) = 주문 시각이 속한 "분(minute)의 close" = 의사결정 시점 가격.
+#   벤치마크(슬리피지 측정 기준) = 다운스트림에서 시간당 집계하는 interval VWAP.
+#   둘은 반드시 다른 시계열이어야 하며, 그래야 슬리피지 분포가 0에 퇴화하지 않는다.
+
+
+@dataclass(frozen=True)
+class AnchorBucket:
+    """앵커 CSV 한 행 = 1분봉. open_time_ms 는 그 분의 시작 epoch ms."""
+
+    open_time_ms: int
+    close: float
+    volume: float
+
+
+@dataclass(frozen=True)
+class AnchorFrame:
+    """앵커 klines fixture 전체. provenance(경로/sha256) 를 함께 보관한다."""
+
+    path: str
+    sha256: str
+    buckets: tuple[AnchorBucket, ...]
+
+    @property
+    def volumes(self) -> list[float]:
+        return [b.volume for b in self.buckets]
+
+    @property
+    def total_volume(self) -> float:
+        return sum(b.volume for b in self.buckets)
+
+
+def load_anchor_frame(
+    path: str,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+) -> AnchorFrame:
+    """앵커 klines CSV(header: open_time_ms,close,volume)를 읽어 AnchorFrame 으로.
+
+    - sha256 은 파일 원문 바이트 기준으로 계산해 provenance 로 기록한다(재현성 감사용).
+    - start_ms/end_ms 가 주어지면 [start_ms, end_ms) 창으로 버킷을 필터링한다.
+    - volume<=0 또는 close<=0 인 행은 앵커·가중치로 쓸 수 없어 제외한다.
+    """
+    raw = Path(path).read_bytes()
+    sha256 = hashlib.sha256(raw).hexdigest()
+
+    buckets: list[AnchorBucket] = []
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
+    required = {"open_time_ms", "close", "volume"}
+    if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+        raise ValueError(
+            f"anchor frame {path} must have header columns {sorted(required)}, "
+            f"got {reader.fieldnames}"
+        )
+
+    for row in reader:
+        open_time_ms = int(row["open_time_ms"])
+        close = float(row["close"])
+        volume = float(row["volume"])
+
+        if start_ms is not None and open_time_ms < start_ms:
+            continue
+        if end_ms is not None and open_time_ms >= end_ms:
+            continue
+        if close <= 0 or volume <= 0:
+            continue
+
+        buckets.append(AnchorBucket(open_time_ms, close, volume))
+
+    if not buckets:
+        raise ValueError(
+            f"anchor frame {path} has no usable buckets in window "
+            f"[{start_ms}, {end_ms}) (need close>0 and volume>0)"
+        )
+
+    buckets.sort(key=lambda b: b.open_time_ms)
+    return AnchorFrame(path=path, sha256=sha256, buckets=tuple(buckets))
+
+
+def sample_anchor_bucket(frame: AnchorFrame) -> AnchorBucket:
+    """거래량 가중으로 분봉 하나를 뽑는다.
+
+    거래가 몰린 분일수록 주문이 더 많이 도착하도록 volume 을 가중치로 쓴다.
+    global random 상태를 사용하므로 seed 고정 시 재현된다.
+    """
+    return random.choices(frame.buckets, weights=frame.volumes, k=1)[0]
+
+
+def sample_anchored_base_time_ms(bucket: AnchorBucket) -> int:
+    """앵커 분 내부 [open_time_ms, open_time_ms+60s) 에서 NEW 이벤트 시각을 샘플링."""
+    return bucket.open_time_ms + random.randrange(0, MINUTE_MS)
+
+
+def effective_rates(
+    bucket: AnchorBucket,
+    frame: AnchorFrame,
+    vol_linked: bool,
+) -> tuple[float, float]:
+    """(partial_fill_rate, cancel_rate) 를 돌려준다.
+
+    vol_linked=False 면 상수 그대로. True 면 그 분의 상대 거래량에 따라 조정한다:
+    거래량이 평균보다 많은 분일수록 체결이 잘 되고(부분체결↑) 취소가 줄도록(취소↓)
+    유동성-체결 상관을 흉내낸다. 값은 [0,1] 로 클램프한다. (선택적, 기본 off)
+    """
+    if not vol_linked:
+        return PARTIAL_FILL_RATE, CANCEL_RATE
+
+    mean_volume = frame.total_volume / len(frame.buckets)
+    ratio = bucket.volume / mean_volume if mean_volume > 0 else 1.0
+
+    partial = min(1.0, max(0.0, PARTIAL_FILL_RATE * ratio))
+    cancel = min(1.0, max(0.0, CANCEL_RATE / ratio)) if ratio > 0 else CANCEL_RATE
+    return partial, cancel
 
 
 def now_ms() -> int:
@@ -177,6 +318,8 @@ def decide_lifecycle(
     order: dict[str, Any],
     market_context: dict[str, Any],
     base_time_ms: int,
+    partial_fill_rate: float = PARTIAL_FILL_RATE,
+    cancel_rate: float = CANCEL_RATE,
 ) -> list[dict[str, Any]]:
     """단일 주문의 생애 주기를 event sequence로 풀어낸다.
 
@@ -186,6 +329,9 @@ def decide_lifecycle(
     - NEW → FILLED
     - NEW → CANCELED
 
+    partial_fill_rate / cancel_rate 는 앵커 분의 상대 거래량에 따라 조정될 수 있어
+    (effective_rates) 인자로 받는다. 기본값은 모듈 상수.
+
     Returns:
         raw_orders message_value로 publish할 event dict list
     """
@@ -193,8 +339,8 @@ def decide_lifecycle(
     order_price = float(order["order_price"])
 
     simulated_parameters = {
-        "partial_fill_rate": PARTIAL_FILL_RATE,
-        "cancel_rate": CANCEL_RATE,
+        "partial_fill_rate": partial_fill_rate,
+        "cancel_rate": cancel_rate,
         "price_deviation_rate": PRICE_DEVIATION_RATE,
         "reference_close": market_context["reference_close"],
         "qty_range": [MIN_QTY, MAX_QTY],
@@ -202,8 +348,18 @@ def decide_lifecycle(
         "simulation_end_ts": market_context.get("simulation_end_ts"),
         "order_id_prefix": market_context["order_id_prefix"],
         "max_lifecycle_offset_ms": MAX_LIFECYCLE_OFFSET_MS,
+        # 앵커 provenance (Phase A) — 재현성·순환부재 감사용
+        "anchor_mode": market_context.get("anchor_mode", ANCHOR_MODE_FIXED),
+        "anchor_file": market_context.get("anchor_file"),
+        "anchor_sha256": market_context.get("anchor_sha256"),
+        "vol_linked_rates": market_context.get("vol_linked_rates", False),
         "note": "synthetic order event, not real Binance private data",
     }
+
+    if market_context.get("anchor_mode") == ANCHOR_MODE_KLINE:
+        simulated_parameters["anchor_open_time_ms"] = market_context.get("anchor_open_time_ms")
+        simulated_parameters["anchor_close"] = market_context.get("anchor_close")
+        simulated_parameters["anchor_volume"] = market_context.get("anchor_volume")
 
     events: list[dict[str, Any]] = []
 
@@ -222,8 +378,8 @@ def decide_lifecycle(
         )
     )
 
-    has_partial = random.random() < PARTIAL_FILL_RATE
-    is_canceled = random.random() < CANCEL_RATE
+    has_partial = random.random() < partial_fill_rate
+    is_canceled = random.random() < cancel_rate
 
     # 2. Optional PARTIALLY_FILLED
     partial_filled_qty = 0.0
@@ -278,7 +434,9 @@ def decide_lifecycle(
 # Kafka publish
 # -----------------------------------------------------------------------------
 
-def build_producer(bootstrap: str) -> KafkaProducer:
+def build_producer(bootstrap: str) -> "KafkaProducer":
+    from kafka import KafkaProducer  # 지연 import: 테스트/생성 로직은 kafka 불요
+
     return KafkaProducer(
         bootstrap_servers=bootstrap,
         key_serializer=lambda key: key.encode("utf-8"),
@@ -322,6 +480,76 @@ def sample_base_time_ms(start_ms: int | None, end_ms: int | None) -> int:
     return random.randrange(start_ms, latest_start_ms)
 
 
+def iter_order_events(
+    *,
+    num_orders: int,
+    symbol: str,
+    order_id_prefix: str,
+    reference_close: float,
+    start_ms: int | None,
+    end_ms: int | None,
+    simulation_start_ts: str | None,
+    simulation_end_ts: str | None,
+    anchor_frame: AnchorFrame | None = None,
+    vol_linked_rates: bool = False,
+) -> Iterator[list[dict[str, Any]]]:
+    """주문별 이벤트 리스트를 순서대로 생성한다 (Kafka 불요, 순수 함수).
+
+    앵커 모드(anchor_frame 제공)에서는:
+      - 거래량 가중으로 분봉을 뽑고(도착 분포),
+      - 그 분의 close 를 기준점으로 주문 가격을 앵커링(±0.3%),
+      - NEW 시각을 그 분 내부에서 샘플링한다.
+    비앵커 모드에서는 기존 동작(고정 reference_close + 창 균등 시각)을 유지한다.
+
+    seed 를 미리 고정하면(run 에서 random.seed) 동일 입력·동일 seed 에 대해 재현된다.
+    """
+    for order_index in range(1, num_orders + 1):
+        if anchor_frame is not None:
+            bucket = sample_anchor_bucket(anchor_frame)
+            order_reference_close = bucket.close
+            base_time_ms = sample_anchored_base_time_ms(bucket)
+            partial_rate, cancel_rate = effective_rates(
+                bucket, anchor_frame, vol_linked_rates
+            )
+            context = {
+                "reference_close": order_reference_close,
+                "simulation_start_ts": simulation_start_ts,
+                "simulation_end_ts": simulation_end_ts,
+                "order_id_prefix": order_id_prefix,
+                "anchor_mode": ANCHOR_MODE_KLINE,
+                "anchor_file": anchor_frame.path,
+                "anchor_sha256": anchor_frame.sha256,
+                "vol_linked_rates": vol_linked_rates,
+                "anchor_open_time_ms": bucket.open_time_ms,
+                "anchor_close": bucket.close,
+                "anchor_volume": bucket.volume,
+            }
+        else:
+            order_reference_close = reference_close
+            base_time_ms = sample_base_time_ms(start_ms, end_ms)
+            partial_rate, cancel_rate = PARTIAL_FILL_RATE, CANCEL_RATE
+            context = {
+                "reference_close": order_reference_close,
+                "simulation_start_ts": simulation_start_ts,
+                "simulation_end_ts": simulation_end_ts,
+                "order_id_prefix": order_id_prefix,
+                "anchor_mode": ANCHOR_MODE_FIXED,
+                "anchor_file": None,
+                "anchor_sha256": None,
+                "vol_linked_rates": False,
+            }
+
+        order = make_base_order(
+            order_index=order_index,
+            reference_close=order_reference_close,
+            symbol=symbol,
+            order_id_prefix=order_id_prefix,
+        )
+        yield decide_lifecycle(
+            order, context, base_time_ms, partial_rate, cancel_rate
+        )
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(description="Synthetic orders simulator")
     parser.add_argument("--bootstrap", default="localhost:9092")
@@ -334,12 +562,24 @@ def run() -> None:
     parser.add_argument("--end-ts")
     parser.add_argument("--order-id-prefix", default="")
     parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--anchor-klines",
+        help="앵커 klines CSV(header: open_time_ms,close,volume). "
+        "지정하면 주문 가격을 각 분의 close 에 앵커링하고 도착을 거래량 가중 샘플링한다.",
+    )
+    parser.add_argument(
+        "--vol-linked-rates",
+        action="store_true",
+        help="(앵커 모드) 분의 상대 거래량에 따라 부분체결/취소율을 조정한다. 기본 off.",
+    )
     args = parser.parse_args()
 
     if args.num_orders < 1:
         parser.error("--num-orders must be >= 1")
     if (args.start_ts is None) != (args.end_ts is None):
         parser.error("--start-ts and --end-ts must be provided together")
+    if args.vol_linked_rates and not args.anchor_klines:
+        parser.error("--vol-linked-rates requires --anchor-klines")
     if args.seed is not None:
         random.seed(args.seed)
 
@@ -349,7 +589,14 @@ def run() -> None:
     except ValueError as exc:
         parser.error(f"invalid timestamp: {exc}")
 
-    if start_ms is not None and end_ms is not None:
+    anchor_frame: AnchorFrame | None = None
+    if args.anchor_klines:
+        try:
+            anchor_frame = load_anchor_frame(args.anchor_klines, start_ms, end_ms)
+        except (OSError, ValueError) as exc:
+            parser.error(f"failed to load --anchor-klines: {exc}")
+    elif start_ms is not None and end_ms is not None:
+        # 비앵커 모드에서만 창 폭 검증 (앵커 모드는 분봉 시각을 그대로 쓴다)
         latest_start_ms = end_ms - MAX_LIFECYCLE_OFFSET_MS
         if latest_start_ms <= start_ms:
             parser.error(
@@ -359,26 +606,21 @@ def run() -> None:
 
     producer = build_producer(args.bootstrap)
 
-    market_context = {
-        "reference_close": args.reference_close,
-        "simulation_start_ts": args.start_ts,
-        "simulation_end_ts": args.end_ts,
-        "order_id_prefix": args.order_id_prefix,
-    }
-
     total_events = 0
 
     try:
-        for order_index in range(1, args.num_orders + 1):
-            order = make_base_order(
-                order_index=order_index,
-                reference_close=args.reference_close,
-                symbol=args.symbol,
-                order_id_prefix=args.order_id_prefix,
-            )
-
-            base_time_ms = sample_base_time_ms(start_ms, end_ms)
-            events = decide_lifecycle(order, market_context, base_time_ms)
+        for events in iter_order_events(
+            num_orders=args.num_orders,
+            symbol=args.symbol,
+            order_id_prefix=args.order_id_prefix,
+            reference_close=args.reference_close,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            simulation_start_ts=args.start_ts,
+            simulation_end_ts=args.end_ts,
+            anchor_frame=anchor_frame,
+            vol_linked_rates=args.vol_linked_rates,
+        ):
             total_events += publish_to_kafka(producer, events, args.topic)
 
             sleep_seconds = sample_arrival_interval(args.max_sleep_ms)
@@ -390,10 +632,16 @@ def run() -> None:
     finally:
         producer.close()
 
+    anchor_note = (
+        f"anchored on {anchor_frame.path} (sha256={anchor_frame.sha256[:12]}…, "
+        f"{len(anchor_frame.buckets)} buckets)"
+        if anchor_frame is not None
+        else f"fixed reference_close={args.reference_close}"
+    )
     print(
         f"orders simulator 완료: "
         f"{args.num_orders} orders, {total_events} events sent to topic={args.topic}, "
-        f"order_id_prefix={args.order_id_prefix}"
+        f"order_id_prefix={args.order_id_prefix}, {anchor_note}"
     )
 
 
