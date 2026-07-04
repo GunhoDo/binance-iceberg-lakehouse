@@ -349,12 +349,13 @@ binance-iceberg-lakehouse/
 ├── requirements.txt
 │
 ├── docs/
-│   ├── PRD.md
-│   ├── architecture.md
-│   ├── decisions.md
-│   ├── operations.md
-│   ├── grafana_metrics.md
-│   └── simulator_design.md
+│   ├── README.md                        # docs 인덱스 + 버전 계보
+│   ├── PRD.md                           # 정본 스펙 (v3)
+│   ├── ROADMAP.md                       # Phase G/A/X/K 실행 계획
+│   ├── gold_serving_improvement_plan.md # Gold 서빙 개선 설계
+│   └── decisions.md                     # 설계 결정 로그 (v1~ 계속 이어짐)
+│   # v2 이전 as-built 문서(architecture/operations/benchmark_lag/data_quality/
+│   # grafana_metrics/simulator_design 등)는 prd-v2 태그에 프리즈
 │
 ├── infra/
 │   ├── docker-compose.yml
@@ -478,11 +479,11 @@ connect grafana UI:3000
 
 ## 11. 참고 문서
 
-- `docs/PRD.md` — 프로젝트 정의서
-- `docs/decisions.md` — 설계 결정 기록
-- `docs/architecture.md` — 아키텍처와 책임 경계
-- `docs/operations.md` — 운영 지표, Airflow, maintenance 정책
-- `docs/simulator_design.md` — 주문 시뮬레이터 설계
-- `docs/benchmark_lag.md` — P2/P3 스트리밍 end-to-end lag 벤치마크 (센터피스)
-- `docs/data_quality.md` — P4 데이터 품질 이상탐지 (freshness/gap/order/null/schema)
-- `docs/grafana_metrics.md` — Phase 4 Grafana dashboard 지표
+**현재(v3):**
+- `docs/README.md` — docs 인덱스 + 버전 계보(v1/v2/v3)
+- `docs/PRD.md` — 정본 스펙 v3 (Gold 실행성과 서빙 + k3d 멀티심볼)
+- `docs/ROADMAP.md` — Phase G/A/X/K 실행 계획, 보류(ML/Flink) 요약
+- `docs/gold_serving_improvement_plan.md` — VWAP·슬리피지 설계 상세
+- `docs/decisions.md` — 설계 결정·보류 항목 로그 (v1~ 계속 이어짐)
+
+**v2 이하(`prd-v2`·`prd-v1` 태그에 프리즈):** architecture / operations / simulator_design / benchmark_lag(lag 벤치 센터피스 p95 25.6s→12.9s) / data_quality / grafana_metrics / deep-interview-scope-v2 / 100x_scale_out_plan. 복구: `git show prd-v2:docs/<파일>`.
