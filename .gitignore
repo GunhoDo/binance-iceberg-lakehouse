@@ -25,6 +25,8 @@ warehouse/
 checkpoints/
 spark-warehouse/
 .bench_warehouse/
+# 앵커 fixture는 processed_klines에서 재생성 가능한 산출물 (export_anchor_klines.py)
+fixtures/
 
 # --- 비밀 / 환경 ---
 .env
