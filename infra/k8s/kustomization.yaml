@@ -1,0 +1,12 @@
+# kustomization.yaml — Phase K1 리소스 (kubectl apply -k infra/k8s)
+#
+# symbols-config ConfigMap 은 config/symbols.yaml 로부터 deploy.sh 에서 생성한다
+# (kustomize configMapGenerator 는 상위 디렉터리 파일 참조를 막으므로 단일 소스를
+#  유지하려 imperative apply 로 분리). deploy.sh 사용 권장.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 10-kafka.yaml
+  - 20-ingestor.yaml

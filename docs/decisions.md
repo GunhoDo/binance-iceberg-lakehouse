@@ -914,6 +914,40 @@ endingOffsets=latest, 체크포인트 없음)로 오프셋 꼬임을 원천 차�
 
 ---
 
+## D28. (v3 / Phase K1) k3d 멀티심볼 수집 — 플레인 매니페스트 + 단일 소스 심볼
+
+### 결정 / 실행
+
+k3d(로컬 k8s) 위에 Kafka(KRaft StatefulSet) + ws_to_kafka 수집기 Deployment 를 올려
+**3심볼(BTC/ETH/SOL) 실시간 이벤트 적재**를 달성했다(K1 완료 기준). 산출물은
+`infra/k8s/`(k3d-cluster / namespace / kafka / ingestor / kustomization / deploy.sh),
+`config/symbols.yaml`, `infra/Dockerfile.ingestor`.
+
+### 핵심 선택
+
+- **오퍼레이터 미도입**: Strimzi/Spark Operator 없이 플레인 매니페스트로 시작(ROADMAP §4.2).
+  필요가 증명되면 승격. 학습·디버깅 표면을 줄이고 매니페스트로 동작을 그대로 읽는다.
+- **심볼 단일 소스**: `config/symbols.yaml` 하나가 심볼·스트림·샤딩의 진실 원천. ConfigMap 으로
+  주입되고, 샤드별 심볼은 Deployment command 에서 pyyaml 로 런타임 추출한다. 심볼 추가는 이 파일만
+  고친다. (kustomize configMapGenerator 는 상위 디렉터리 파일 참조를 막아 deploy.sh 의 imperative
+  `--from-file` 로 생성.)
+- **샤딩 = 샤드당 1 WS 연결**: 바이낸스 combined-stream 1024 stream/연결 제한 대비. shard-0=BTC·ETH,
+  shard-1=SOL. (symbols × streams) 증가 시 샤드 Deployment 를 늘린다.
+- **격리 계승**: 브로커 수명(PVC) vs 잡 수명(Pod) 분리(v1 W1 교훈). 광고 리스너는 StatefulSet 파드
+  FQDN(`kafka-0.kafka.<ns>.svc`)으로 고정.
+
+### 대안
+
+- Compose 유지: 단일 호스트라 멀티심볼·샤딩·자동 백필(K3) 확장이 어렵다.
+- Strimzi(Kafka Operator): 운영 편의는 크나 K1 학습 목적엔 과함. 승격 후보.
+
+### 재검토 시점
+
+- K2(spark on k8s)에서 로컬 레지스트리로 spark 이미지 push 시 이미지 배포 방식 재점검.
+- 브로커 다중화·토픽 파티션 확장이 필요해질 때 StatefulSet replicas/파티션 재설계.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.

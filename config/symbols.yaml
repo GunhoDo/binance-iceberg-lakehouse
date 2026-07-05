@@ -1,0 +1,25 @@
+# symbols.yaml — 멀티심볼 파이프라인의 단일 소스 (Phase K)
+#
+# 이 파일 하나가 수집 대상 심볼·스트림·샤딩의 진실 원천이다.
+# k8s 에서는 ConfigMap 으로 주입되고(ingestor Deployment), 시뮬레이터/앵커 픽스처도
+# 여기서 심볼 목록을 읽는다. 심볼 추가는 여기만 고치면 된다.
+#
+# 샤딩 원칙: 바이낸스 combined-stream 은 연결당 1024 stream 제한이 있다.
+# (symbols × streams) 가 커지면 샤드 단위 Deployment 로 분리한다(shard 당 1 WS 연결).
+
+streams:
+  - aggTrade
+  - kline_1m
+
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+
+# 샤드별 심볼 배치 — 각 샤드는 별도 ingestor Deployment(1 WS 연결)로 뜬다.
+shards:
+  shard-0:
+    - BTCUSDT
+    - ETHUSDT
+  shard-1:
+    - SOLUSDT
