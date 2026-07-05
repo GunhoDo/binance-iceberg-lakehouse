@@ -196,18 +196,28 @@ class IdempotencyAndMergePolicyTests(unittest.TestCase):
         self.assertNotIn(".count()", source)
         self.assertNotIn(".unpersist()", source)
 
-    def test_staging_jobs_are_idempotent_by_kafka_offset(self) -> None:
-        for path in [
-            "src/jobs/daily/02_build_staging_klines_window.py",
-            "src/jobs/daily/03_build_staging_orders_window.py",
-        ]:
-            with self.subTest(path=path):
-                source = assert_valid_python(self, path)
-                self.assertIn('Window.partitionBy("source_topic", "source_partition", "source_offset")', source)
-                self.assertIn("target.source_topic = source.source_topic", source)
-                self.assertIn("target.source_partition = source.source_partition", source)
-                self.assertIn("target.source_offset = source.source_offset", source)
-                self.assertIn("WHEN NOT MATCHED THEN INSERT *", source)
+    def test_staging_jobs_are_idempotent_by_business_key_not_kafka_offset(self) -> None:
+        # K5: 스테이징 dedup/MERGE 는 비즈니스 키 기반이어야 한다. Kafka
+        # (topic,partition,offset)은 정체성이 아니라 계보/타이브레이크로만 — 오프셋 재사용
+        # (k3d 재생성·구 데이터 오프셋 대역 중복)에 새 심볼 행이 드롭되던 버그를 제거(D32).
+        klines = assert_valid_python(self, "src/jobs/daily/02_build_staging_klines_window.py")
+        self.assertIn('Window.partitionBy("symbol", "interval", "open_time")', klines)
+        self.assertIn("target.symbol = source.symbol", klines)
+        self.assertIn("target.`interval` = source.`interval`", klines)
+        self.assertIn("target.open_time = source.open_time", klines)
+
+        orders = assert_valid_python(self, "src/jobs/daily/03_build_staging_orders_window.py")
+        self.assertIn('Window.partitionBy("order_id", "order_status", "event_time")', orders)
+        self.assertIn("target.order_id = source.order_id", orders)
+        self.assertIn("target.order_status = source.order_status", orders)
+        self.assertIn("target.event_time = source.event_time", orders)
+
+        for source in (klines, orders):
+            # 비즈니스 키 UPSERT (MATCHED→UPDATE, NOT MATCHED→INSERT)
+            self.assertIn("WHEN MATCHED THEN UPDATE SET *", source)
+            self.assertIn("WHEN NOT MATCHED THEN INSERT *", source)
+            # 오프셋을 스테이징 MERGE 의 정체성 키로 다시 쓰지 않는다
+            self.assertNotIn("target.source_offset = source.source_offset", source)
 
     def test_kline_merge_does_not_overwrite_newer_offset_with_late_event(self) -> None:
         source = assert_valid_python(self, "src/jobs/daily/04_merge_processed_klines_window.py")

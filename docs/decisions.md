@@ -1132,6 +1132,62 @@ processed→summary 관통.
 
 ---
 
+## D32. (v3 / Phase K5) 스테이징 멱등성 키를 Kafka offset → 비즈니스 키로
+
+### 결정 / 실행
+
+staging_klines/staging_orders 의 dedup·MERGE 키를 **Kafka (topic, partition, offset)
+에서 비즈니스 키로** 전환했다. D31 에서 드러난 오프셋 재사용 충돌의 근본 해결이다.
+
+- **02 klines**: 배치 내 dedup 과 MERGE 를 `(symbol, interval, open_time)` 로. is_closed
+  (확정봉) 우선 → offset → ingest 순으로 분봉당 최신 1건 유지, MATCHED→UPDATE / NOT
+  MATCHED→INSERT (UPSERT).
+- **03 orders**: `(order_id, order_status, event_time)` 로. 주문은 라이프사이클 이벤트
+  스트림(NEW/PARTIALLY_FILLED/FILLED/CANCELED)이라 이벤트 단위 키를 쓴다 — 05 가 한 주문의
+  전체 이벤트 이력으로 상태·타임스탬프를 재구성하므로 이벤트를 잃으면 안 된다.
+- Kafka offset 은 정체성에서 은퇴, 계보/타이브레이크(같은 배치·클러스터 수명 내 최신 tick
+  판별)로만 남는다.
+- K4 의 우회책 `reset_multisymbol_staging.py` + 오케스트레이터 step 0 제거(불필요).
+
+### 왜 offset 이 정체성으로 부적합했나
+
+`(topic, partition, offset)`은 **운송 좌표**지 **레코드 정체성**이 아니다. 한 토픽·파티션의
+*현재 수명* 안에서만 유일 → k3d 재생성, 리플레이, 백필, 구 단일심볼 데이터가 같은 오프셋
+대역을 이미 점유한 상황에서 새 멀티심볼 메시지가 같은 오프셋을 재사용하면 `WHEN NOT MATCHED`
+에 걸려 **다른 심볼 레코드가 드롭**됐다(D31 의 ETH/SOL 소실). 비즈니스 키는 클러스터·오프셋
+수명과 무관하게 안정적이라 이 버그 종류 자체가 사라진다.
+
+정답 패턴은 이미 프로젝트 안에 있었다: **trades(01)는 스테이징 없이 raw→processed 직행 +
+`trade_id`(비즈니스 키) dedup 이라 이 함정을 처음부터 안 겪었다.** K5 는 klines/orders 를 이
+검증된 패턴에 맞춘 것.
+
+### 핵심 선택
+
+- **A안(스테이징 유지, 키만 교체) 채택**: 스테이징 계층·04/05/06/07 구조를 유지하고 02/03 의
+  dedup·MERGE 키만 비즈니스 키로. 변경 표면 최소·다운스트림 무영향(04 는 여전히 분봉당 최신,
+  05 는 전체 이벤트 이력 집계 — 오히려 오프셋 중복 이벤트가 없어 더 깔끔).
+- **UPSERT (MATCHED→UPDATE SET \*)**: 기존 `WHEN NOT MATCHED INSERT` 만으로는 재적재 시 최신
+  버전 반영이 안 됨. 비즈니스 키가 같으면 최신으로 갱신.
+- **orders 키에 event_time 포함**: order_status 만으론 다중 PARTIALLY_FILLED 가 충돌. 셋 다
+  non-null 보장(파싱 필터) + 시뮬레이터 결정적 출력이라 재적재 멱등.
+
+### 검증
+
+정적 정책 테스트 재작성(`test_staging_jobs_are_idempotent_by_business_key_not_kafka_offset`):
+02=(symbol,interval,open_time), 03=(order_id,order_status,event_time), UPSERT, 오프셋 정체성
+키 부재 단언. 로컬 23 tests OK. 통합 증명(k3d): 스테이징을 **BTCUSDT 만 남기고** 삭제(구
+데이터가 오프셋 0..N 점유 = 버그 유발 조건 재현) → 새 02/03 실행 → 스테이징에 ETH/SOL 재등장
+= 오프셋 충돌 없이 비즈니스 키로 삽입됨을 확인.
+
+### 대안 / 알려진 델타 (B안 = 추가 후속)
+
+- **B안(스테이징 제거, raw→processed 직행)**: klines/orders 도 trades 처럼 스테이징을 없애고
+  한 잡으로. 테이블·잡·DAG·마이그레이션 정리 필요라 K5 범위 밖. A안이 이미 버그를 제거하므로
+  급하지 않음 — 운영 단순화 시점에 재검토.
+- offset 은 processed 계층(04/05)에서도 타이브레이크로 남아 있다(정체성 아님) — 유지.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.

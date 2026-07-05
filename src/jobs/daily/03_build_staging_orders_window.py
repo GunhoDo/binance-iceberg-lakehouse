@@ -1,9 +1,12 @@
-"""04_build_staging_orders_window.py
+"""03_build_staging_orders_window.py
 
 raw_orders -> staging_orders window 기반 적재 job.
 
-멱등성 기준:
-- source_topic + source_partition + source_offset 기준 MERGE INSERT
+멱등성 기준 (K5, 비즈니스 키):
+- (order_id, order_status, event_time) 기준 MERGE UPSERT — 라이프사이클 이벤트 단위.
+  주문은 이벤트 스트림(NEW/PARTIALLY_FILLED/FILLED/CANCELED)이라 이벤트 단위 키를 쓴다.
+  05 가 한 주문의 전체 이벤트 이력으로 상태·타임스탬프를 재구성하므로 이벤트를 잃으면 안 됨.
+- Kafka (topic, partition, offset)은 정체성이 아니라 계보/타이브레이크로만(참고 D31·D32).
 """
 
 from __future__ import annotations
@@ -91,8 +94,11 @@ def run() -> None:
         & F.col("event_time").isNotNull()
     )
 
-    w = Window.partitionBy("source_topic", "source_partition", "source_offset").orderBy(
-        F.col("ingest_time").desc_nulls_last()
+    # 비즈니스 키(order_id, order_status, event_time)로 이벤트당 1건 선택. 같은 이벤트가
+    # 재적재되면 최신 ingest 를 유지(오프셋은 타이브레이크로만).
+    w = Window.partitionBy("order_id", "order_status", "event_time").orderBy(
+        F.col("ingest_time").desc_nulls_last(),
+        F.col("source_offset").desc_nulls_last(),
     )
 
     deduped_df = (
@@ -104,13 +110,16 @@ def run() -> None:
 
     deduped_df.createOrReplaceTempView("tmp_staging_orders_batch")
 
+    # 비즈니스 키 UPSERT: 같은 이벤트면 UPDATE, 없으면 INSERT. 오프셋이 겹쳐도(구 주문이
+    # 같은 오프셋 점유) 서로 다른 이벤트면 정상 삽입 — 오프셋 재사용 충돌 제거(D32).
     spark.sql(f"""
         MERGE INTO {STAGING_ORDERS} AS target
         USING tmp_staging_orders_batch AS source
-        ON target.source_topic = source.source_topic
-           AND target.source_partition = source.source_partition
-           AND target.source_offset = source.source_offset
+        ON target.order_id = source.order_id
+           AND target.order_status = source.order_status
+           AND target.event_time = source.event_time
 
+        WHEN MATCHED THEN UPDATE SET *
         WHEN NOT MATCHED THEN INSERT *
     """)
 

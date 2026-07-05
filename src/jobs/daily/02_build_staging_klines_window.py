@@ -2,9 +2,11 @@
 
 raw_klines -> staging_klines window 기반 적재 job.
 
-멱등성 기준:
-- source_topic + source_partition + source_offset 기준 MERGE INSERT
-- 같은 raw Kafka offset을 다시 처리해도 staging_klines에 중복 적재하지 않음
+멱등성 기준 (K5, 비즈니스 키):
+- (symbol, interval, open_time) 기준 MERGE UPSERT — 한 분봉의 최신 버전 1건만 유지.
+- Kafka (topic, partition, offset)은 "정체성"이 아니라 계보/타이브레이크 메타데이터로만
+  쓴다. 오프셋은 한 토픽·파티션의 현재 수명 안에서만 유일해 k3d 재생성·리플레이·구 데이터
+  오프셋 대역 중복에 깨지기 때문(참고 D31·D32).
 """
 
 from __future__ import annotations
@@ -105,9 +107,13 @@ def run() -> None:
         & F.col("open_time").isNotNull()
     )
 
-    # 같은 Kafka offset이 batch 안에 중복되면 1건만 선택
-    w = Window.partitionBy("source_topic", "source_partition", "source_offset").orderBy(
-        F.col("ingest_time").desc_nulls_last()
+    # 비즈니스 키(symbol, interval, open_time)로 배치 안에서 분봉당 최신 버전 1건 선택.
+    # is_closed=true(확정봉) 우선 → 최신 offset → 최신 ingest 순. (오프셋은 한 배치·
+    # 클러스터 수명 안에서 최신 tick 판별용 타이브레이크로만 사용)
+    w = Window.partitionBy("symbol", "interval", "open_time").orderBy(
+        F.col("is_closed").desc_nulls_last(),
+        F.col("source_offset").desc_nulls_last(),
+        F.col("ingest_time").desc_nulls_last(),
     )
 
     deduped_df = (
@@ -119,13 +125,16 @@ def run() -> None:
 
     deduped_df.createOrReplaceTempView("tmp_staging_klines_batch")
 
+    # 비즈니스 키 UPSERT: 같은 분봉이면 최신 버전으로 UPDATE, 없으면 INSERT.
+    # 오프셋이 겹쳐도(구 데이터가 같은 오프셋 점유) 서로 다른 분봉이면 정상 삽입된다.
     spark.sql(f"""
         MERGE INTO {STAGING_KLINES} AS target
         USING tmp_staging_klines_batch AS source
-        ON target.source_topic = source.source_topic
-           AND target.source_partition = source.source_partition
-           AND target.source_offset = source.source_offset
+        ON target.symbol = source.symbol
+           AND target.`interval` = source.`interval`
+           AND target.open_time = source.open_time
 
+        WHEN MATCHED THEN UPDATE SET *
         WHEN NOT MATCHED THEN INSERT *
     """)
 

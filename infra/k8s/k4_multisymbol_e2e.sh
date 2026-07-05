@@ -50,10 +50,8 @@ spark_prefix() {
 }
 
 echo "==> 창 window=[$WIN_START, $WIN_END)  symbols=[$SYMBOLS]"
-
-echo ""; echo "### 0) staging_klines/staging_orders 초기화 (오프셋 충돌 방지 · 참고 D31)"
-{ spark_prefix; echo "  /workspace/src/jobs/maintenance/reset_multisymbol_staging.py"; } \
-  | "$ROOT/infra/k8s/k4_run.sh" "reset-staging"
+# K5 부터 스테이징 dedup 이 비즈니스 키 기반이라(참고 D32) 오프셋 충돌 방지용 스테이징
+# 리셋 단계가 필요 없다. 멱등 UPSERT 라 반복 실행 안전.
 
 echo ""; echo "### 1) k3d Kafka klines/trades → S3 raw 배치 적재"
 for topic in klines trades; do
