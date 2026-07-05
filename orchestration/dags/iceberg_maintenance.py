@@ -1,11 +1,13 @@
 """iceberg_maintenance.py
 
-Iceberg maintenance DAG.
+Iceberg 유지보수 DAG.
 
-Flow:
-1. table health before maintenance
-2. Iceberg maintenance procedures
-3. table health after maintenance
+흐름:
+1. 유지보수 전 테이블 헬스(full)
+2. Iceberg 유지보수 프로시저(compaction / delete rewrite / manifests / snapshots)
+3. 유지보수 후 테이블 헬스(full)
+
+Phase K3: 실행은 KubernetesPodOperator(Spark on k8s). lib/spark_on_k8s.py 참조.
 """
 
 from __future__ import annotations
@@ -13,11 +15,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.operators.bash import BashOperator
 
+from lib.spark_on_k8s import spark_k8s_task
 
-SPARK_CONTAINER = "spark-runner"
-PROJECT_ROOT = "/workspace"
 
 DEFAULT_ARGS = {
     "owner": "lakehouse",
@@ -25,32 +25,6 @@ DEFAULT_ARGS = {
     "retries": 0,
     "retry_delay": timedelta(minutes=5),
 }
-
-
-def run_job_task(
-    task_id: str,
-    job_path: str,
-    run_id_suffix: str = "",
-    table_health_mode: str | None = None,
-) -> BashOperator:
-    env_args = (
-        f"-e TABLE_HEALTH_MODE={table_health_mode} "
-        if table_health_mode is not None
-        else ""
-    )
-
-    return BashOperator(
-        task_id=task_id,
-        bash_command=f"""
-        docker exec {env_args}{SPARK_CONTAINER} \
-          {PROJECT_ROOT}/orchestration/scripts/run_job_with_log.sh \
-          {task_id} \
-          {job_path} \
-          "{{{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
-          "{{{{ data_interval_end.strftime('%Y-%m-%dT%H:%M:%S') }}}}" \
-          "{{{{ run_id }}}}{run_id_suffix}"
-        """,
-    )
 
 
 with DAG(
@@ -64,19 +38,19 @@ with DAG(
     tags=["lakehouse", "iceberg", "maintenance"],
 ) as dag:
 
-    check_table_health_before = run_job_task(
+    check_table_health_before = spark_k8s_task(
         task_id="check_table_health_before",
         job_path="src/jobs/daily/09_check_table_health.py",
         run_id_suffix="__before",
         table_health_mode="full",
     )
 
-    run_iceberg_maintenance = run_job_task(
+    run_iceberg_maintenance = spark_k8s_task(
         task_id="run_iceberg_maintenance",
         job_path="src/jobs/maintenance/run_iceberg_maintenance.py",
     )
 
-    check_table_health_after = run_job_task(
+    check_table_health_after = spark_k8s_task(
         task_id="check_table_health_after",
         job_path="src/jobs/daily/09_check_table_health.py",
         run_id_suffix="__after",

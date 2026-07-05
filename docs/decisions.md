@@ -1000,6 +1000,71 @@ order_execution_summary 744, 08 checks=5 / 09 tables=5). 정리도 확인 — ex
 
 ---
 
+## D30. (v3 / Phase K3) Airflow on k8s — helm(KubernetesExecutor) + KubernetesPodOperator + 갭 자동 백필
+
+### 결정 / 실행
+
+Compose 시절 orchestration(`docker exec spark-runner` BashOperator)을 **공식 apache-airflow
+helm chart(KubernetesExecutor)로 k8s 에 올리고**, 각 Spark 잡을 KubernetesPodOperator 로
+실행하도록 전환했다(K3). 새 갭 탐지→자동 백필 DAG 도 추가. 산출물: `infra/Dockerfile.airflow-k8s`,
+`infra/k8s/airflow-values.yaml`, `infra/k8s/deploy_airflow.sh`, `orchestration/dags/lib/
+spark_on_k8s.py`(KPO 팩토리), daily/maintenance DAG 전환, `orchestration/dags/gap_backfill.py`,
+`src/jobs/maintenance/detect_gaps.py`.
+
+실행 3계층: **KubernetesExecutor 워커 파드 → (KPO) Spark 드라이버 파드(client 모드) →
+executor 파드**. K2 자산(binance-spark-k8s 이미지, `spark` SA, `aws-creds` Secret) 재사용.
+
+검증(실제 스케줄러 + KubernetesExecutor): `airflow dags trigger gap_backfill` 실행 →
+detect_gaps(success, 파드 3계층 라이브 확인, BTCUSDT 744/744 갭 0, XCom push) → decide(success,
+XCom 읽어 분기) → no_gaps(success) / trigger_backfill(skipped, 갭 없어 정확히 미트리거) →
+DagRun success. daily 파이프라인은 `build_processed_trades` 태스크가 KPO→Spark 파드로
+success(동일 팩토리라 전이). DAG import 에러 0, 3개 DAG 정상 인식.
+
+### 핵심 선택
+
+- **chart 1.16.0 / Airflow 2.10.5 (Airflow 3 아님)**: chart 라인이 1.16.0(2.10.5) → 1.18.0
+  (3.0.2)로 점프. 기존 DAG 가 Airflow 2.x 용이라 마지막 Airflow-2 chart 를 택해 재작성 리스크
+  최소화. Compose 는 2.11.2 — orchestration-only 라 패치 차이 무의미.
+- **KubernetesPodOperator (Spark Operator CRD 아님)**: K2 의 client-mode spark-submit 을 그대로
+  태스크로 옮긴다(오퍼레이터 미도입 원칙 D28 계승). 워커→드라이버 2단 파드는 감수 — 학습·디버깅
+  표면을 줄이고 K2 실행 방식을 재사용. k3d 자원 절약을 위해 K3 태스크는 executor 1개·1g 로 낮춤.
+- **DAG 배포 = 이미지 베이크**: git-sync/PVC 대신 커스텀 이미지에 DAG 를 굽고 k3d import.
+  재현성 우선. 트레이드오프: DAG/src 변경 시 재빌드 필요(실제로 detect_gaps.py 를 spark 이미지에
+  넣느라 재빌드했다 — 새 src 잡은 spark 이미지도 재빌드해야 함).
+- **자동 백필 = 데이터 기반 내부 갭**: detect_gaps 가 market_hourly_summary 의 [min,max] 범위에서
+  누락된 시간(심볼별)을 left-anti 로 찾아 XCom 으로 넘기고, BranchPythonOperator 가 가장 이른 갭
+  '하루'를 daily 파이프라인 logical_date 로 재실행 트리거(MVP — 연속 갭은 다음 실행이 이어감).
+  벽시계 아닌 데이터 범위 기준(2024 데이터를 2026 에 돌려도 유효).
+- **자격/이미지/SA 재사용**: aws-creds Secret(드라이버 envFrom, executor secretKeyRef), spark SA
+  (executor 파드 생성 RBAC), binance-spark-k8s 이미지 — 모두 K2 그대로.
+
+### 함정 / 교훈
+
+- **Bitnami Docker Hub 카탈로그 정리(2025)**: chart 고정 `bitnami/postgresql:16.1.0-debian-11-r15`
+  가 사라짐("not found"). `bitnamilegacy/postgresql` 로 이전된 동일 태그를 지정 +
+  `global.security.allowInsecureImages=true`.
+- **helm 훅 교착**: 마이그레이션/유저생성 잡이 기본 post-install 훅이라 `--wait` 가 scheduler
+  ready 를 먼저 기다리는데 scheduler 는 마이그레이션을 기다려 데드락. `migrateDatabaseJob.
+  useHelmHooks=false` + `createUserJob.useHelmHooks=false` 로 일반 매니페스트화해 해소.
+
+### 대안 / 알려진 델타
+
+- **Airflow 3.x(chart 1.22)**: 최신이지만 DAG breaking change 다수 → 보류(승격 후보).
+- **SparkKubernetesOperator + Spark Operator**: 선언적이나 오퍼레이터 도입 필요 — 미채택.
+- **pipeline_run_summary 인라인 로깅 델타**: Compose 의 run_job_with_log.sh 는 태스크마다
+  pipeline_run_summary 에 INSERT 했으나, K3 는 이를 생략한다(자격/실행이 로컬 master 인 run_job.sh
+  기반이라 k8s 에 부적합 + spark 이중 기동 비용). Airflow 메타데이터 DB 가 태스크 성공/시간/로그를
+  네이티브로 추적 → 런 관측은 오케스트레이터가 소유. Grafana 가 이 테이블에 의존하면 별도 잡으로
+  재도입 필요(재검토 항목).
+
+### 재검토 시점
+
+- K4(멀티심볼 E2E): detect_gaps 는 이미 심볼별 갭을 보므로 심볼 확장 시 백필 트리거를 dynamic task
+  mapping 으로 다중 갭·다중 심볼 지원하도록 승격.
+- 운영 승격 시: git-sync DAG 배포, 외부 Postgres/Secret, Airflow 3.x, pipeline_run_summary 재도입.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
