@@ -1,0 +1,96 @@
+# 20-ingestor.yaml — ws_to_kafka 수집기 Deployment (샤드 단위) (Phase K1)
+#
+# 샤드당 1 Deployment = 1 WS 연결. 심볼은 config/symbols.yaml(ConfigMap) 에서
+# SHARD 별로 런타임 추출한다(단일 소스). 심볼 추가는 symbols.yaml 만 고치면 된다.
+#
+# 공통 파드 스펙은 shard-0/shard-1 에서 반복된다(플레인 매니페스트 원칙 — 오퍼레이터·헬름 미도입).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestor-shard-0
+  namespace: binance-lakehouse
+  labels:
+    app: ingestor
+    shard: shard-0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingestor
+      shard: shard-0
+  template:
+    metadata:
+      labels:
+        app: ingestor
+        shard: shard-0
+    spec:
+      containers:
+        - name: ingestor
+          image: binance-ingestor:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SHARD
+              value: "shard-0"
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka-0.kafka.binance-lakehouse.svc.cluster.local:9092"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              SYMS=$(python -c "import yaml,os;d=yaml.safe_load(open('/config/symbols.yaml'));print(','.join(d['shards'][os.environ['SHARD']]))")
+              STREAMS=$(python -c "import yaml;d=yaml.safe_load(open('/config/symbols.yaml'));print(','.join(d['streams']))")
+              echo "shard=$SHARD symbols=$SYMS streams=$STREAMS bootstrap=$KAFKA_BOOTSTRAP"
+              exec python /app/ws_to_kafka.py --symbols "$SYMS" --streams "$STREAMS" --bootstrap "$KAFKA_BOOTSTRAP"
+          volumeMounts:
+            - name: symbols
+              mountPath: /config
+      volumes:
+        - name: symbols
+          configMap:
+            name: symbols-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestor-shard-1
+  namespace: binance-lakehouse
+  labels:
+    app: ingestor
+    shard: shard-1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingestor
+      shard: shard-1
+  template:
+    metadata:
+      labels:
+        app: ingestor
+        shard: shard-1
+    spec:
+      containers:
+        - name: ingestor
+          image: binance-ingestor:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SHARD
+              value: "shard-1"
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka-0.kafka.binance-lakehouse.svc.cluster.local:9092"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              SYMS=$(python -c "import yaml,os;d=yaml.safe_load(open('/config/symbols.yaml'));print(','.join(d['shards'][os.environ['SHARD']]))")
+              STREAMS=$(python -c "import yaml;d=yaml.safe_load(open('/config/symbols.yaml'));print(','.join(d['streams']))")
+              echo "shard=$SHARD symbols=$SYMS streams=$STREAMS bootstrap=$KAFKA_BOOTSTRAP"
+              exec python /app/ws_to_kafka.py --symbols "$SYMS" --streams "$STREAMS" --bootstrap "$KAFKA_BOOTSTRAP"
+          volumeMounts:
+            - name: symbols
+              mountPath: /config
+      volumes:
+        - name: symbols
+          configMap:
+            name: symbols-config

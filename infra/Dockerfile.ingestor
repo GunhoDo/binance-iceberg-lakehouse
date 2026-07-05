@@ -1,0 +1,17 @@
+# Dockerfile.ingestor — ws_to_kafka WebSocket 수집기 이미지 (Phase K)
+#
+# build:  docker build -f infra/Dockerfile.ingestor -t binance-ingestor:latest .
+# import: k3d image import binance-ingestor:latest -c binance-lakehouse
+FROM python:3.12-slim-bookworm
+
+RUN pip install --no-cache-dir \
+      websocket-client \
+      kafka-python-ng \
+      pyyaml
+
+WORKDIR /app
+COPY infra/ws_to_kafka.py /app/ws_to_kafka.py
+
+# 심볼 단일 소스(config/symbols.yaml)는 ConfigMap 으로 /config 에 마운트된다.
+# 샤드별 심볼 추출은 Deployment command 에서 pyyaml 로 처리한다.
+CMD ["python", "/app/ws_to_kafka.py", "--help"]

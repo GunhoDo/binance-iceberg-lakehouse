@@ -1,0 +1,25 @@
+# k3d-cluster.yaml — 로컬 k8s 클러스터 (Phase K)
+#
+# 생성:  k3d cluster create --config infra/k8s/k3d-cluster.yaml
+# 삭제:  k3d cluster delete binance-lakehouse
+#
+# 로컬 레지스트리(registry.localhost:5111)를 함께 만들어 spark-runner/ingestor
+# 이미지를 push 한다(K2). 오퍼레이터(Strimzi/Spark Operator)는 도입하지 않는다 —
+# 플레인 매니페스트 + spark-submit k8s 모드로 시작한다(ROADMAP §4.2).
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: binance-lakehouse
+servers: 1
+agents: 1
+registries:
+  create:
+    name: registry.localhost
+    host: "0.0.0.0"
+    hostPort: "5111"
+options:
+  k3s:
+    nodeLabels:
+      - label: role=lakehouse
+        nodeFilters:
+          - agent:0
