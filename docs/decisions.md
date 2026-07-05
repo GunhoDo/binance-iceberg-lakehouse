@@ -1193,6 +1193,55 @@ staging_klines/staging_orders 의 dedup·MERGE 키를 **Kafka (topic, partition,
 
 ---
 
+## D33. (v3 검증 마감) PRD 성공지표 2개 델타 정직 종료 — 상관 입도 / 슬리피지 알람 발화
+
+기능(FR-1~10)은 G/A/X/K 로 이미 delivered 였지만, PRD §7 성공지표 중 두 항목이 "미확정"으로
+열려 있었다. 정직 원칙(검증 전 미주장)에 따라 둘을 실측으로 닫았다.
+
+### 델타 1 — A-6 "시간대별 주문 수 ↔ 실 volume 상관 > 0.7"
+
+이전 기록의 상관 0.55 는 **측정 입도 아티팩트**였다. 도착 분포는 volume 가중
+(`sample_anchor_bucket` = `random.choices(weights=volume)`)이라 기댓값상 분당 주문수 ∝ volume
+이 수학적으로 보장되지만, 실 num_orders 는 분(minute)에 비해 희소(9000주문/44640분 = 분당
+0.2건)라 **분 단위** 상관은 표본잡음으로 희석된다. PRD/ROADMAP A-6 이 명시한 **시간(hour)
+단위**로 집계하면 잡음이 평균화된다. 로컬 픽스처(44640분봉)로 재측정:
+
+| 입도 | 9000 주문 | 44640 주문 |
+|---|---|---|
+| 분(minute) | r=0.601 | r=0.849 |
+| **시간(hour) — PRD 명시 입도** | **r=0.967** | r=0.992 |
+
+→ PRD A-6(>0.7) **충족**(시간 단위 0.967). 설계는 처음부터 옳았고 지표를 잘못된 입도로 쟀던
+것. 회귀 방지로 정량 테스트 추가(`test_hourly_order_count_correlates_with_volume_above_0_7`,
+self-contained 합성 픽스처).
+
+### 델타 2 — G/X "슬리피지 알람 동작 1회 이상 시연"
+
+**핵심 정직 포인트: 정상 앵커링된 슬리피지는 ~0 중심(K4 실측 최대 ±3bps)이라 실데이터로는
+50bps 임계를 절대 안 넘는다 — 즉 좋은 데이터에서 알람이 침묵하는 게 정상 동작이다.** 따라서
+"발화 시연"은 설계상 **초과 입력(결함 주입)** 으로만 가능하다.
+
+Grafana 실 unified-alerting 엔진으로 시연: 실 룰(`slippage-threshold-breach`)과 동일한
+`threshold(gt 50)` 노드에 60bps 를 주입 → 룰 상태 **firing**(value=1) 전이 확인 →
+notification policy 가 warning 을 Discord contact point 로 라우팅(`Sending alerts to local
+notifier`) → placeholder webhook 이 `404 Unknown Webhook` 으로 **안전 실패**(외부 전송 없음 =
+설계된 graceful). 시연 후 결함주입 룰 삭제·Grafana 원복.
+
+- 주의: 같은 실행에서 실 슬리피지 룰도 notifier 로 갔지만 그건 **컨테이너에 AWS 자격이 없어
+  Athena 쿼리가 실패한 Error 상태 알림**이지 임계 초과가 아니다(구분 기록). 컨테이너에 자격을
+  마운트하고 초과 행을 삽입하면 실 룰 자체도 발화하나, ~0 중심 데이터에선 그 행이 인위적이라
+  결함주입과 본질이 같다.
+- durable 산출물: 실 룰이 gt-50 임계 + `GREATEST(ABS(buy_slippage_bps),
+  ABS(sell_slippage_bps))` SQL 로 배선됐는지 정적 테스트(`SlippageAlertRuleTests`). 시연은
+  일회성이지만 배선 정합성은 이 테스트로 상시 회귀 방지.
+
+### 결론
+
+PRD v3 는 기능(FR)·성공지표(§7) 양쪽에서 종료. 남은 것은 의도적 비목표(ML·Flink)뿐. 로컬
+테스트 40 OK(정적 26 = 기존 23+신규 3, 앵커링 14 = 기존 13+신규 1).
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.

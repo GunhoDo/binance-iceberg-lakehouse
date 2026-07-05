@@ -380,5 +380,42 @@ class ObservabilityAndMaintenancePolicyTests(unittest.TestCase):
         self.assertIn("remove_orphan_files skipped in MVP", maintenance_source)
 
 
+class SlippageAlertRuleTests(unittest.TestCase):
+    """슬리피지 알람(FR-5) 배선이 발화 조건에 올바로 연결됐는지 정적 검증.
+
+    실 앵커링 슬리피지는 ~0 중심(<±3bps)이라 실데이터로는 50bps 임계를 넘지 않는다
+    (= 좋은 데이터에서 안 울리는 게 정상). 발화는 초과 입력(결함 주입)으로만 가능하고,
+    Grafana 실 엔진 발화는 별도 시연(decisions D33)으로 확인했다. 이 테스트는 그 시연이
+    대표성을 갖도록 **실 룰이 gt-50 임계 + 올바른 SQL 로 배선**돼 있음을 회귀 방지한다.
+    """
+
+    def _slippage_rule_block(self) -> str:
+        rules = read("dashboard/grafana/provisioning/alerting/alert-rules.yaml")
+        self.assertIn("uid: slippage-threshold-breach", rules)
+        # execution 그룹의 슬리피지 룰 이하 블록만 잘라 임계·환원을 검사한다.
+        start = rules.index("uid: slippage-threshold-breach")
+        return rules[start:]
+
+    def test_rule_uses_gt_50_threshold_on_reduce_last(self) -> None:
+        block = self._slippage_rule_block()
+        self.assertIn("condition: C", block)
+        self.assertIn("reducer: last", block)
+        self.assertIn("type: threshold", block)
+        self.assertIn("type: gt", block)
+        self.assertIn("params: [50]", block)
+
+    def test_rule_queries_direction_split_slippage_of_order_execution_summary(self) -> None:
+        block = self._slippage_rule_block()
+        self.assertIn("order_execution_summary", block)
+        self.assertIn("buy_slippage_bps", block)
+        self.assertIn("sell_slippage_bps", block)
+        # BUY/SELL 중 큰 |슬리피지| 를 임계와 비교 (방향 상쇄 방지)
+        self.assertIn("GREATEST(ABS(buy_slippage_bps), ABS(sell_slippage_bps))", block)
+
+    def test_rule_routes_as_warning_severity(self) -> None:
+        block = self._slippage_rule_block()
+        self.assertIn("severity: warning", block)
+
+
 if __name__ == "__main__":
     unittest.main()
