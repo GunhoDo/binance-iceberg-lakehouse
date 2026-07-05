@@ -948,6 +948,58 @@ k3d(로컬 k8s) 위에 Kafka(KRaft StatefulSet) + ws_to_kafka 수집기 Deployme
 
 ---
 
+## D29. (v3 / Phase K2) Spark on k8s — client 모드 spark-submit + 공식 이미지 + 최소권한 RBAC
+
+### 결정 / 실행
+
+일일 파이프라인 **01~09 잡 전부를 k3d 위 Spark-on-k8s 로 실행**했다(K2 완료 기준). 드라이버는
+Job 파드로 뜨고, 드라이버가 executor 파드 2개를 직접 스케줄한다(client 모드). S3/Glue 자격은
+`aws-creds` Secret 으로 주입한다. 산출물: `infra/Dockerfile.spark-k8s`, `infra/k8s/`(30-spark-rbac /
+40-spark-job.template / spark_submit_k8s.sh / run_pipeline_k8s.sh / build_spark_image.sh).
+
+검증: 2024-01-01 윈도우로 01~09 순차 실행 전부 성공. 타깃 카운트가 기존 베이스라인과 일치
+(klines 44,640 / staging_orders 22,079 / processed_orders 9,000 / market_hourly_summary 744 /
+order_execution_summary 744, 08 checks=5 / 09 tables=5). 정리도 확인 — executor conf-map/PVC
+잔여 0, Job 은 `ttlSecondsAfterFinished` 로 자동 소멸.
+
+### 핵심 선택
+
+- **공식 apache/spark 이미지 베이스**(pip pyspark 아님): k8s executor 파드는 이미지 내장
+  엔트리포인트(`/opt/entrypoint.sh executor`)로 뜨는데 pip pyspark 배포판엔 이게 없다.
+  `apache/spark:3.5.5-scala2.12-java17-python3-ubuntu`(멀티아치 → Apple Silicon k3d 동작)에
+  Iceberg/hadoop-aws jar·파이썬 의존성·저장소 `src` 를 얹는다. Compose 용 `Dockerfile.spark`(pip)
+  는 그대로 두고 이미지를 분리(D26 자격 전환과 동일한 병행 원칙).
+- **client 모드 (cluster 아님)**: 드라이버가 Job 파드 자신 → `kubectl logs` 로 로그·종료코드가
+  바로 잡히고 Job 성공/실패에 그대로 매핑된다. executor 가 드라이버에 붙도록 `spark.driver.host`
+  = 파드 IP(Downward API), bindAddress 0.0.0.0, 포트 고정(7078/7079). 별도 headless Service 불필요.
+- **k3d image import (레지스트리 push 아님)**: ingestor(K1)와 동일 패턴 유지 →
+  `imagePullPolicy=IfNotPresent`. D28 재검토 항목("레지스트리 push 방식")은 import 로 결론.
+- **executor 는 src 코드 불필요**: 잡이 순수 Spark SQL/DataFrame(파이썬 UDF 0) → executor 는
+  jar+S3자격만. 단, s3a 원천을 읽으므로 executor 에도 자격 주입 필요 →
+  `spark.kubernetes.executor.secretKeyRef` 로 AWS_* 4키를 Secret 에서 env 로. 드라이버는 envFrom.
+- **네임스페이스 최소권한 RBAC**: ServiceAccount `spark` + 네임스페이스 한정 Role. 클러스터 전역
+  권한 없음. Spark stop() 이 executor pods/services/configmaps/**persistentvolumeclaims** 를
+  `deletecollection` 으로 일괄 정리하므로 이 4종에 deletecollection 을 명시(누락 시 작업은 끝나도
+  종료 정리에서 Forbidden 로그 + orphan 리소스 — 실제로 2회 반복해 좁혀 넣었다).
+- **자격은 로컬 aws configure 에서 Secret 생성**: `spark_submit_k8s.sh` 가 `aws configure get` 으로
+  Secret 을 idempotent 생성(git 미커밋). D26 의 DefaultAWSCredentialsProviderChain 을 k8s 로 계승.
+
+### 대안
+
+- **cluster 모드**: 드라이버가 별도 파드 → 로그/종료코드 수집이 번거롭고 배치 오케스트레이션엔 이점
+  적음. client 모드 채택.
+- **Spark Operator(SparkApplication CRD)**: 선언적이지만 K2 학습·최소 표면 목적엔 과함. 승격 후보.
+- **로컬 레지스트리 push**: k3d-cluster.yaml 에 레지스트리를 두었으나 import 가 더 단순(인증 불필요).
+
+### 재검토 시점
+
+- K3(Airflow KubernetesExecutor, helm 필요)에서 이 Job 템플릿을 KubernetesPodOperator/Executor
+  로 승격 시 spark_submit_k8s.sh 를 DAG 태스크로 대체.
+- 전체 월(52.5M trades) 재적재가 필요해지면 executor instances/메모리·셔플 파티션 재설계
+  (K2 검증은 실행 경로 확인이 목적 — 데이터 결과는 X-6 가 Compose 에서 이미 검증, D27).
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
