@@ -332,8 +332,13 @@ class TableHealthPolicyTests(unittest.TestCase):
     def test_maintenance_dag_runs_table_health_in_full_mode(self) -> None:
         source = assert_valid_python(self, "orchestration/dags/iceberg_maintenance.py")
 
-        self.assertIn("-e TABLE_HEALTH_MODE={table_health_mode}", source)
+        # 유지보수 전/후 두 번의 table health 를 full 모드로 호출한다.
         self.assertEqual(source.count('table_health_mode="full"'), 2)
+
+        # Phase K3: 실행 방식은 KPO 팩토리가 TABLE_HEALTH_MODE 를 파드 env 로 export 한다
+        # (Compose 시절 `docker exec -e TABLE_HEALTH_MODE=` 대체).
+        factory = assert_valid_python(self, "orchestration/dags/lib/spark_on_k8s.py")
+        self.assertIn("export TABLE_HEALTH_MODE={table_health_mode}", factory)
 
     def test_run_spark_sql_defaults_match_small_ec2_settings(self) -> None:
         source = read("orchestration/scripts/run_spark_sql.sh")

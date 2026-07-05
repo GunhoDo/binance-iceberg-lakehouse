@@ -1,0 +1,93 @@
+# airflow-values.yaml — 공식 apache-airflow helm chart(1.16.0) 오버라이드 (Phase K3)
+#
+# 설치: infra/k8s/deploy_airflow.sh (helm upgrade --install -n binance-lakehouse)
+# 실행자: KubernetesExecutor — 각 태스크가 워커 파드로 뜨고, KubernetesPodOperator
+# 태스크는 다시 Spark 드라이버 파드를 만든다(lib/spark_on_k8s.py). 자격/이미지/SA 는
+# K2 자산(binance-spark-k8s, spark SA, aws-creds Secret) 재사용.
+
+# 워커·스케줄러가 태스크를 k8s 파드로 실행
+executor: KubernetesExecutor
+
+# DAG 베이크한 커스텀 이미지(k3d image import). git-sync/PVC 미사용.
+images:
+  airflow:
+    repository: binance-airflow
+    tag: latest
+    pullPolicy: IfNotPresent
+
+dags:
+  persistence:
+    enabled: false
+  gitSync:
+    enabled: false
+
+# 메타데이터 DB: chart 번들 postgres
+# Bitnami 가 2025 Docker Hub 카탈로그를 정리해 chart 고정 태그(bitnami/postgresql:
+# 16.1.0-debian-11-r15)가 사라짐 → bitnamilegacy 로 이전된 동일 태그를 지정한다.
+# 비공식 레지스트리 가드 우회를 위해 allowInsecureImages 필요.
+global:
+  security:
+    allowInsecureImages: true
+postgresql:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 16.1.0-debian-11-r15
+
+# KubernetesExecutor 는 Celery/Redis 불필요
+redis:
+  enabled: false
+
+# 웹서버 기본 관리자 계정(로컬 전용)
+webserver:
+  replicas: 1
+  defaultUser:
+    enabled: true
+    role: Admin
+    username: admin
+    password: admin
+    email: admin@example.com
+    firstName: admin
+    lastName: user
+
+scheduler:
+  replicas: 1
+
+# 로컬 자원 절약: 비동기 트리거러/스탯츠디/플라워/pgbouncer 끔
+triggerer:
+  enabled: false
+statsd:
+  enabled: false
+flower:
+  enabled: false
+pgbouncer:
+  enabled: false
+
+# KPO 가 드라이버 파드를 만들 수 있도록 airflow SA 에 네임스페이스 파드 권한 부여
+rbac:
+  create: true
+serviceAccount:
+  create: true
+
+# 재시작 시 경고 방지용 고정 키(로컬 전용 — 운영에선 외부 Secret 사용)
+webserverSecretKey: binance-lakehouse-local-webserver-key
+
+# DB 마이그레이션/유저생성 잡을 helm post-install 훅이 아닌 일반 매니페스트로 실행.
+# 기본(훅)이면 --wait 가 scheduler ready 를 먼저 기다리는데 scheduler 는 마이그레이션을
+# 기다려 교착된다. 훅을 끄면 잡이 동시 실행돼 교착이 풀린다.
+migrateDatabaseJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+createUserJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+
+# KubernetesExecutor 태스크 워커 파드 자원(작게)
+workers:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

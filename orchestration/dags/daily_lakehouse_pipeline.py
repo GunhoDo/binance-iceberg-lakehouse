@@ -1,9 +1,11 @@
 """daily_lakehouse_pipeline.py
 
-Phase 3 Airflow DAG.
+일일 레이크하우스 파이프라인 DAG.
 
-Airflow is orchestration only.
-Actual Spark jobs run inside spark-runner container.
+Airflow 는 오케스트레이션 전용. 실제 Spark 잡은 KubernetesPodOperator 로 뜬 파드가
+spark-submit(client 모드)로 실행하고, 그 드라이버가 executor 파드를 스케줄한다
+(Phase K3 — 기존 `docker exec spark-runner` BashOperator 를 대체). 실행 방식 상세는
+lib/spark_on_k8s.py 참조.
 """
 
 from __future__ import annotations
@@ -11,11 +13,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.operators.bash import BashOperator
 
+from lib.spark_on_k8s import spark_k8s_task
 
-SPARK_CONTAINER = "spark-runner"
-PROJECT_ROOT = "/workspace"
 
 DEFAULT_ARGS = {
     "owner": "lakehouse",
@@ -25,73 +25,58 @@ DEFAULT_ARGS = {
 }
 
 
-def spark_job_task(task_id: str, job_path: str) -> BashOperator:
-    return BashOperator(
-        task_id=task_id,
-        bash_command=f"""
-        docker exec {SPARK_CONTAINER} \
-          {PROJECT_ROOT}/orchestration/scripts/run_job_with_log.sh \
-          {task_id} \
-          {job_path} \
-          "{{{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:%SZ') }}}}" \
-          "{{{{ data_interval_end.strftime('%Y-%m-%dT%H:%M:%SZ') }}}}" \
-          "{{{{ run_id }}}}"
-        """,
-    )
-
-
 with DAG(
     dag_id="daily_lakehouse_pipeline",
     default_args=DEFAULT_ARGS,
-    description="Window-based idempotent daily lakehouse pipeline",
+    description="Window-based idempotent daily lakehouse pipeline (Spark on k8s)",
     start_date=datetime(2026, 5, 6),
     schedule="@daily",
     catchup=False,
     max_active_runs=1,
-    tags=["lakehouse", "iceberg", "phase3"],
+    tags=["lakehouse", "iceberg", "k8s"],
 ) as dag:
 
-    build_processed_trades = spark_job_task(
+    build_processed_trades = spark_k8s_task(
         "build_processed_trades",
         "src/jobs/daily/01_build_processed_trades_window.py",
     )
 
-    build_staging_klines = spark_job_task(
+    build_staging_klines = spark_k8s_task(
         "build_staging_klines",
         "src/jobs/daily/02_build_staging_klines_window.py",
     )
 
-    build_staging_orders = spark_job_task(
+    build_staging_orders = spark_k8s_task(
         "build_staging_orders",
         "src/jobs/daily/03_build_staging_orders_window.py",
     )
 
-    merge_processed_klines = spark_job_task(
+    merge_processed_klines = spark_k8s_task(
         "merge_processed_klines",
         "src/jobs/daily/04_merge_processed_klines_window.py",
     )
 
-    merge_processed_orders = spark_job_task(
+    merge_processed_orders = spark_k8s_task(
         "merge_processed_orders",
         "src/jobs/daily/05_merge_processed_orders_window.py",
     )
 
-    build_market_hourly_summary = spark_job_task(
+    build_market_hourly_summary = spark_k8s_task(
         "build_market_hourly_summary",
         "src/jobs/daily/06_build_market_hourly_summary_window.py",
     )
 
-    build_order_execution_summary = spark_job_task(
+    build_order_execution_summary = spark_k8s_task(
         "build_order_execution_summary",
         "src/jobs/daily/07_build_order_execution_summary_window.py",
     )
 
-    check_data_quality = spark_job_task(
+    check_data_quality = spark_k8s_task(
         "check_data_quality",
         "src/jobs/daily/08_check_data_quality.py",
     )
 
-    check_table_health = spark_job_task(
+    check_table_health = spark_k8s_task(
         "check_table_health",
         "src/jobs/daily/09_check_table_health.py",
     )

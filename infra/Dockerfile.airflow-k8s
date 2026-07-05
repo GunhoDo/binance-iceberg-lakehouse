@@ -1,0 +1,17 @@
+######################################################################
+# Airflow-on-Kubernetes 이미지 (Phase K3)
+#
+# 공식 apache-airflow helm chart(1.16.0, appVersion 2.10.5)에 맞춘 커스텀 이미지.
+# chart 라인이 1.16.0(Airflow 2.10.5) → 1.18.0(Airflow 3.0.2)로 점프하므로,
+# DAG 가 Airflow 2.x 용인 현 코드에는 마지막 Airflow-2 chart(2.10.5)가 안전하다.
+# (Compose 는 2.11.2 — orchestration-only 라 패치 차이 무의미, D30 참조.)
+#
+# 베이스 2.10.5 이미지는 cncf.kubernetes provider(KubernetesExecutor·
+# KubernetesPodOperator)를 기본 포함하므로 추가 pip 설치 없이 DAG 만 베이크한다.
+# DAG 배포 방식: git-sync/PVC 대신 이미지 베이크(k3d 로컬 재현성 우선).
+######################################################################
+FROM apache/airflow:2.10.5-python3.11
+
+# DAG + lib(spark_on_k8s 팩토리) 베이크. dags 폴더가 sys.path 에 들어가므로
+# `from lib.spark_on_k8s import ...` 가 해석된다(lib/__init__.py 존재).
+COPY orchestration/dags/ /opt/airflow/dags/
