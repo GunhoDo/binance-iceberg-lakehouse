@@ -15,11 +15,14 @@ PRD §10.2, §14.1 참조.
 
 from __future__ import annotations
 
+import os
+
 from pyspark.sql import functions as F
 
 from src.pipelines.common.spark_session import get_spark_streaming
 
-KAFKA_BOOTSTRAP = "localhost:9092"
+# 컨테이너/k3d 안에서는 kafka:29092(내부 리스너)로 접근한다. 호스트 실행은 localhost:9092.
+KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
 KAFKA_TOPIC = "orders"
 OUTPUT_PATH = "s3a://binance-iceberg-lake/raw/orders/"
 CHECKPOINT_PATH = "s3a://binance-iceberg-lake/checkpoints/raw_orders/"
