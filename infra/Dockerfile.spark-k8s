@@ -23,14 +23,22 @@ RUN set -eux; \
     base_hadoop=https://repo1.maven.org/maven2/org/apache/hadoop; \
     base_aws=https://repo1.maven.org/maven2/com/amazonaws; \
     base_wildfly=https://repo1.maven.org/maven2/org/wildfly/openssl/wildfly-openssl; \
+    base_kafka=https://repo1.maven.org/maven2/org/apache/spark; \
+    base_kclient=https://repo1.maven.org/maven2/org/apache/kafka; \
+    base_pool=https://repo1.maven.org/maven2/org/apache/commons/commons-pool2; \
     curl -fsSL -o "$SPARK_JARS/iceberg-spark-runtime-3.5_2.12-1.7.0.jar" "$base_iceberg/iceberg-spark-runtime-3.5_2.12/1.7.0/iceberg-spark-runtime-3.5_2.12-1.7.0.jar"; \
     curl -fsSL -o "$SPARK_JARS/iceberg-aws-bundle-1.7.0.jar"            "$base_iceberg/iceberg-aws-bundle/1.7.0/iceberg-aws-bundle-1.7.0.jar"; \
     curl -fsSL -o "$SPARK_JARS/hadoop-aws-3.3.4.jar"                    "$base_hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar"; \
     curl -fsSL -o "$SPARK_JARS/aws-java-sdk-bundle-1.12.262.jar"        "$base_aws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar"; \
-    curl -fsSL -o "$SPARK_JARS/wildfly-openssl-1.0.7.Final.jar"         "$base_wildfly/1.0.7.Final/wildfly-openssl-1.0.7.Final.jar"
+    curl -fsSL -o "$SPARK_JARS/wildfly-openssl-1.0.7.Final.jar"         "$base_wildfly/1.0.7.Final/wildfly-openssl-1.0.7.Final.jar"; \
+    curl -fsSL -o "$SPARK_JARS/spark-sql-kafka-0-10_2.12-3.5.5.jar"           "$base_kafka/spark-sql-kafka-0-10_2.12/3.5.5/spark-sql-kafka-0-10_2.12-3.5.5.jar"; \
+    curl -fsSL -o "$SPARK_JARS/spark-token-provider-kafka-0-10_2.12-3.5.5.jar" "$base_kafka/spark-token-provider-kafka-0-10_2.12/3.5.5/spark-token-provider-kafka-0-10_2.12-3.5.5.jar"; \
+    curl -fsSL -o "$SPARK_JARS/kafka-clients-3.4.1.jar"                       "$base_kclient/kafka-clients/3.4.1/kafka-clients-3.4.1.jar"; \
+    curl -fsSL -o "$SPARK_JARS/commons-pool2-2.11.1.jar"                      "$base_pool/2.11.1/commons-pool2-2.11.1.jar"
 
 # --- 파이썬 의존성 (베이스에 pyspark 포함, 잡이 쓰는 추가분만) ---
-RUN pip install --no-cache-dir boto3 pandas pyarrow tabulate
+# kafka-python-ng: orders_simulator(K4)가 k3d Kafka 로 주문을 발행할 때 사용.
+RUN pip install --no-cache-dir boto3 pandas pyarrow tabulate kafka-python-ng
 
 # --- 저장소 코드 (드라이버가 src.jobs.* 임포트) ---
 # fixtures/데이터 제외하고 코드만. PYTHONPATH 로 `src` 패키지 해석.

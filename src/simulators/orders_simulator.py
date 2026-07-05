@@ -591,8 +591,17 @@ def run() -> None:
 
     anchor_frame: AnchorFrame | None = None
     if args.anchor_klines:
+        anchor_path = args.anchor_klines
+        # K4: s3://... 픽스처면 로컬 /tmp 로 내려받아 쓴다(k8s 잡이 S3 로 공유).
+        if anchor_path.startswith("s3://"):
+            import boto3
+
+            bucket, _, key = anchor_path[len("s3://"):].partition("/")
+            local = f"/tmp/{key.rsplit('/', 1)[-1]}"
+            boto3.client("s3").download_file(bucket, key, local)
+            anchor_path = local
         try:
-            anchor_frame = load_anchor_frame(args.anchor_klines, start_ms, end_ms)
+            anchor_frame = load_anchor_frame(anchor_path, start_ms, end_ms)
         except (OSError, ValueError) as exc:
             parser.error(f"failed to load --anchor-klines: {exc}")
     elif start_ms is not None and end_ms is not None:

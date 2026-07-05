@@ -1,7 +1,11 @@
 {
   "uid": "binance-market-overview",
   "title": "Binance Market Overview",
-  "tags": ["binance", "market", "lakehouse"],
+  "tags": [
+    "binance",
+    "market",
+    "lakehouse"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -11,7 +15,39 @@
     "to": "2024-03-01T00:00:00Z"
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "symbol",
+        "label": "Symbol",
+        "type": "custom",
+        "description": "서빙 심볼 선택 (Phase K4 멀티심볼)",
+        "query": "BTCUSDT,ETHUSDT,SOLUSDT",
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": true,
+          "text": "BTCUSDT",
+          "value": "BTCUSDT"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "BTCUSDT",
+            "value": "BTCUSDT"
+          },
+          {
+            "selected": false,
+            "text": "ETHUSDT",
+            "value": "ETHUSDT"
+          },
+          {
+            "selected": false,
+            "text": "SOLUSDT",
+            "value": "SOLUSDT"
+          }
+        ]
+      }
+    ]
   },
   "panels": [
     {
@@ -26,7 +62,7 @@
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, CAST(close_price AS DOUBLE) AS close_price FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, CAST(close_price AS DOUBLE) AS close_price FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
       "fieldConfig": {
@@ -35,7 +71,12 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
     },
     {
       "id": 2,
@@ -49,10 +90,15 @@
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, CAST(kline_volume AS DOUBLE) AS kline_volume FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, CAST(kline_volume AS DOUBLE) AS kline_volume FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
     },
     {
       "id": 3,
@@ -66,10 +112,15 @@
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, trade_count FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, trade_count FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
     },
     {
       "id": 4,
@@ -83,7 +134,7 @@
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, CAST(avg_trade_price AS DOUBLE) AS avg_trade_price FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, CAST(avg_trade_price AS DOUBLE) AS avg_trade_price FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
       "fieldConfig": {
@@ -92,7 +143,12 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
     },
     {
       "id": 5,
@@ -106,10 +162,15 @@
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, maker_trade_count, taker_trade_count FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, maker_trade_count, taker_trade_count FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 }
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      }
     },
     {
       "id": 6,
@@ -123,10 +184,15 @@
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT summary_hour, symbol, open_price, high_price, low_price, close_price, kline_volume, kline_quote_volume, kline_number_of_trades, trade_count, trade_qty, trade_quote_qty, avg_trade_price, vwap, maker_trade_count, taker_trade_count, updated_at FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour DESC LIMIT 100"
+          "rawSQL": "SELECT summary_hour, symbol, open_price, high_price, low_price, close_price, kline_volume, kline_quote_volume, kline_number_of_trades, trade_count, trade_qty, trade_quote_qty, avg_trade_price, vwap, maker_trade_count, taker_trade_count, updated_at FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour DESC LIMIT 100"
         }
       ],
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 }
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      }
     },
     {
       "id": 7,
@@ -141,29 +207,60 @@
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, CAST(vwap AS DOUBLE) AS vwap, CAST(avg_trade_price AS DOUBLE) AS avg_trade_price FROM market_hourly_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, CAST(vwap AS DOUBLE) AS vwap, CAST(avg_trade_price AS DOUBLE) AS avg_trade_price FROM market_hourly_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM market_hourly_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "currencyUSD" },
+        "defaults": {
+          "unit": "currencyUSD"
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "vwap" },
+            "matcher": {
+              "id": "byName",
+              "options": "vwap"
+            },
             "properties": [
-              { "id": "displayName", "value": "VWAP (benchmark)" },
-              { "id": "custom.lineWidth", "value": 2 }
+              {
+                "id": "displayName",
+                "value": "VWAP (benchmark)"
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "avg_trade_price" },
+            "matcher": {
+              "id": "byName",
+              "options": "avg_trade_price"
+            },
             "properties": [
-              { "id": "displayName", "value": "Avg Trade Price" },
-              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 4] } }
+              {
+                "id": "displayName",
+                "value": "Avg Trade Price"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 }
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      }
     }
   ]
 }
