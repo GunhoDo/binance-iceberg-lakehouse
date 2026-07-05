@@ -167,6 +167,67 @@ class ArrivalDistributionTests(unittest.TestCase):
             counts[bucket.open_time_ms] += 1
         self.assertGreater(counts[1000000000000], counts[1000000060000] * 20)
 
+    def test_hourly_order_count_correlates_with_volume_above_0_7(self) -> None:
+        """PRD/ROADMAP A-6 지표를 **정량**으로 못박는다.
+
+        지표는 "시간대별(hourly) 주문 수와 실 volume 의 상관 > 0.7". 도착 분포는
+        volume 가중이라 기댓값상 분당 주문수 ∝ volume 이지만, 실 num_orders 는
+        분(minute) 대비 희소해(예: 9000주문/44640분) 분 단위 상관은 표본잡음으로
+        희석된다(≈0.6). PRD 가 요구한 **시간 단위**로 집계하면 잡음이 평균화돼
+        임계를 여유롭게 넘는다는 것을 self-contained 합성 픽스처로 검증한다.
+        """
+        hour_ms = 3_600_000
+        minute_ms = 60_000
+        # 24시간 × 60분. 시간마다 volume 레벨을 크게 다르게(결정적 패턴) 준다.
+        rows = ["open_time_ms,close,volume"]
+        base_ms = 1_704_067_200_000  # 2024-01-01T00:00:00Z
+        for hour in range(24):
+            # 시간별 기준 거래량: 1~24 를 뒤섞어 단조증가가 아닌 굴곡을 만든다.
+            hour_level = ((hour * 7) % 24) + 1
+            for m in range(60):
+                open_ms = base_ms + hour * hour_ms + m * minute_ms
+                # 분 내 소폭 변동(결정적) — 시간 총량이 hour_level 을 따르도록.
+                vol = hour_level * (1.0 + 0.02 * (m % 5))
+                rows.append(f"{open_ms},{100.0 + hour:.8f},{vol:.8f}")
+        frame = sim.load_anchor_frame(_write_csv("\n".join(rows) + "\n"))
+
+        random.seed(42)
+        cnt_by_hour: dict[int, int] = {}
+        vol_by_hour: dict[int, float] = {}
+        for b in frame.buckets:
+            hr = (b.open_time_ms // hour_ms) * hour_ms
+            vol_by_hour[hr] = vol_by_hour.get(hr, 0.0) + b.volume
+        for events in sim.iter_order_events(
+            num_orders=6000,
+            symbol="BTCUSDT",
+            order_id_prefix="H",
+            reference_close=43000.0,
+            start_ms=None,
+            end_ms=None,
+            simulation_start_ts=None,
+            simulation_end_ts=None,
+            anchor_frame=frame,
+        ):
+            open_ms = events[0]["simulated_parameters"]["anchor_open_time_ms"]
+            hr = (open_ms // hour_ms) * hour_ms
+            cnt_by_hour[hr] = cnt_by_hour.get(hr, 0) + 1
+
+        hours = sorted(vol_by_hour)
+        counts = [cnt_by_hour.get(h, 0) for h in hours]
+        vols = [vol_by_hour[h] for h in hours]
+
+        n = len(hours)
+        mc = sum(counts) / n
+        mv = sum(vols) / n
+        cov = sum((c - mc) * (v - mv) for c, v in zip(counts, vols))
+        vc = sum((c - mc) ** 2 for c in counts)
+        vv = sum((v - mv) ** 2 for v in vols)
+        r = cov / (vc**0.5 * vv**0.5)
+
+        self.assertGreater(
+            r, 0.7, f"hourly count↔volume corr {r:.3f} must exceed PRD A-6 threshold 0.7"
+        )
+
 
 class ProvenanceTests(unittest.TestCase):
     def test_anchor_provenance_recorded(self) -> None:

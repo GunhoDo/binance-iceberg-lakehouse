@@ -1132,6 +1132,116 @@ processed→summary 관통.
 
 ---
 
+## D32. (v3 / Phase K5) 스테이징 멱등성 키를 Kafka offset → 비즈니스 키로
+
+### 결정 / 실행
+
+staging_klines/staging_orders 의 dedup·MERGE 키를 **Kafka (topic, partition, offset)
+에서 비즈니스 키로** 전환했다. D31 에서 드러난 오프셋 재사용 충돌의 근본 해결이다.
+
+- **02 klines**: 배치 내 dedup 과 MERGE 를 `(symbol, interval, open_time)` 로. is_closed
+  (확정봉) 우선 → offset → ingest 순으로 분봉당 최신 1건 유지, MATCHED→UPDATE / NOT
+  MATCHED→INSERT (UPSERT).
+- **03 orders**: `(order_id, order_status, event_time)` 로. 주문은 라이프사이클 이벤트
+  스트림(NEW/PARTIALLY_FILLED/FILLED/CANCELED)이라 이벤트 단위 키를 쓴다 — 05 가 한 주문의
+  전체 이벤트 이력으로 상태·타임스탬프를 재구성하므로 이벤트를 잃으면 안 된다.
+- Kafka offset 은 정체성에서 은퇴, 계보/타이브레이크(같은 배치·클러스터 수명 내 최신 tick
+  판별)로만 남는다.
+- K4 의 우회책 `reset_multisymbol_staging.py` + 오케스트레이터 step 0 제거(불필요).
+
+### 왜 offset 이 정체성으로 부적합했나
+
+`(topic, partition, offset)`은 **운송 좌표**지 **레코드 정체성**이 아니다. 한 토픽·파티션의
+*현재 수명* 안에서만 유일 → k3d 재생성, 리플레이, 백필, 구 단일심볼 데이터가 같은 오프셋
+대역을 이미 점유한 상황에서 새 멀티심볼 메시지가 같은 오프셋을 재사용하면 `WHEN NOT MATCHED`
+에 걸려 **다른 심볼 레코드가 드롭**됐다(D31 의 ETH/SOL 소실). 비즈니스 키는 클러스터·오프셋
+수명과 무관하게 안정적이라 이 버그 종류 자체가 사라진다.
+
+정답 패턴은 이미 프로젝트 안에 있었다: **trades(01)는 스테이징 없이 raw→processed 직행 +
+`trade_id`(비즈니스 키) dedup 이라 이 함정을 처음부터 안 겪었다.** K5 는 klines/orders 를 이
+검증된 패턴에 맞춘 것.
+
+### 핵심 선택
+
+- **A안(스테이징 유지, 키만 교체) 채택**: 스테이징 계층·04/05/06/07 구조를 유지하고 02/03 의
+  dedup·MERGE 키만 비즈니스 키로. 변경 표면 최소·다운스트림 무영향(04 는 여전히 분봉당 최신,
+  05 는 전체 이벤트 이력 집계 — 오히려 오프셋 중복 이벤트가 없어 더 깔끔).
+- **UPSERT (MATCHED→UPDATE SET \*)**: 기존 `WHEN NOT MATCHED INSERT` 만으로는 재적재 시 최신
+  버전 반영이 안 됨. 비즈니스 키가 같으면 최신으로 갱신.
+- **orders 키에 event_time 포함**: order_status 만으론 다중 PARTIALLY_FILLED 가 충돌. 셋 다
+  non-null 보장(파싱 필터) + 시뮬레이터 결정적 출력이라 재적재 멱등.
+
+### 검증
+
+정적 정책 테스트 재작성(`test_staging_jobs_are_idempotent_by_business_key_not_kafka_offset`):
+02=(symbol,interval,open_time), 03=(order_id,order_status,event_time), UPSERT, 오프셋 정체성
+키 부재 단언. 로컬 23 tests OK. 통합 증명(k3d): 스테이징을 **BTCUSDT 만 남기고** 삭제(구
+데이터가 오프셋 0..N 점유 = 버그 유발 조건 재현) → 새 02/03 실행 → 스테이징에 ETH/SOL 재등장
+= 오프셋 충돌 없이 비즈니스 키로 삽입됨을 확인.
+
+### 대안 / 알려진 델타 (B안 = 선택적 단순화, 대가 있음)
+
+- **B안(스테이징 제거, raw→processed 직행)은 "수렴 권장"이 아니라 트레이드오프 있는 선택지다.**
+  klines/orders 도 trades 처럼 스테이징을 없애면 잡·테이블이 줄어 표면상 단순해 보이지만,
+  스테이징은 실제 역할이 있다: (1) raw JSON→타입 컬럼 파싱·정규화(메달리온 silver), (2) 특히
+  orders 는 staging_orders = **이벤트 로그**(전체 라이프사이클) ≠ processed_orders =
+  **현재 상태**라 계층 분리가 정보를 보존한다, (3) raw 재파싱 없이 재처리 가능. trades 에
+  스테이징이 없는 건 "스테이징이 나빠서"가 아니라 trades 가 단순 append-only 라 필요없어서다.
+  따라서 K5 는 A안(스테이징 유지·키만 교체)으로 버그를 이미 제거했고, **B안은 기본 계획이
+  아니다** — 구체적 운영 단순화 압력이 생길 때만, 위 세 역할 상실을 감수하고 재검토할 선택지.
+- offset 은 processed 계층(04/05)에서도 타이브레이크로 남아 있다(정체성 아님) — 유지.
+
+---
+
+## D33. (v3 검증 마감) PRD 성공지표 2개 델타 정직 종료 — 상관 입도 / 슬리피지 알람 발화
+
+기능(FR-1~10)은 G/A/X/K 로 이미 delivered 였지만, PRD §7 성공지표 중 두 항목이 "미확정"으로
+열려 있었다. 정직 원칙(검증 전 미주장)에 따라 둘을 실측으로 닫았다.
+
+### 델타 1 — A-6 "시간대별 주문 수 ↔ 실 volume 상관 > 0.7"
+
+이전 기록의 상관 0.55 는 **측정 입도 아티팩트**였다. 도착 분포는 volume 가중
+(`sample_anchor_bucket` = `random.choices(weights=volume)`)이라 기댓값상 분당 주문수 ∝ volume
+이 수학적으로 보장되지만, 실 num_orders 는 분(minute)에 비해 희소(9000주문/44640분 = 분당
+0.2건)라 **분 단위** 상관은 표본잡음으로 희석된다. PRD/ROADMAP A-6 이 명시한 **시간(hour)
+단위**로 집계하면 잡음이 평균화된다. 로컬 픽스처(44640분봉)로 재측정:
+
+| 입도 | 9000 주문 | 44640 주문 |
+|---|---|---|
+| 분(minute) | r=0.601 | r=0.849 |
+| **시간(hour) — PRD 명시 입도** | **r=0.967** | r=0.992 |
+
+→ PRD A-6(>0.7) **충족**(시간 단위 0.967). 설계는 처음부터 옳았고 지표를 잘못된 입도로 쟀던
+것. 회귀 방지로 정량 테스트 추가(`test_hourly_order_count_correlates_with_volume_above_0_7`,
+self-contained 합성 픽스처).
+
+### 델타 2 — G/X "슬리피지 알람 동작 1회 이상 시연"
+
+**핵심 정직 포인트: 정상 앵커링된 슬리피지는 ~0 중심(K4 실측 최대 ±3bps)이라 실데이터로는
+50bps 임계를 절대 안 넘는다 — 즉 좋은 데이터에서 알람이 침묵하는 게 정상 동작이다.** 따라서
+"발화 시연"은 설계상 **초과 입력(결함 주입)** 으로만 가능하다.
+
+Grafana 실 unified-alerting 엔진으로 시연: 실 룰(`slippage-threshold-breach`)과 동일한
+`threshold(gt 50)` 노드에 60bps 를 주입 → 룰 상태 **firing**(value=1) 전이 확인 →
+notification policy 가 warning 을 Discord contact point 로 라우팅(`Sending alerts to local
+notifier`) → placeholder webhook 이 `404 Unknown Webhook` 으로 **안전 실패**(외부 전송 없음 =
+설계된 graceful). 시연 후 결함주입 룰 삭제·Grafana 원복.
+
+- 주의: 같은 실행에서 실 슬리피지 룰도 notifier 로 갔지만 그건 **컨테이너에 AWS 자격이 없어
+  Athena 쿼리가 실패한 Error 상태 알림**이지 임계 초과가 아니다(구분 기록). 컨테이너에 자격을
+  마운트하고 초과 행을 삽입하면 실 룰 자체도 발화하나, ~0 중심 데이터에선 그 행이 인위적이라
+  결함주입과 본질이 같다.
+- durable 산출물: 실 룰이 gt-50 임계 + `GREATEST(ABS(buy_slippage_bps),
+  ABS(sell_slippage_bps))` SQL 로 배선됐는지 정적 테스트(`SlippageAlertRuleTests`). 시연은
+  일회성이지만 배선 정합성은 이 테스트로 상시 회귀 방지.
+
+### 결론
+
+PRD v3 는 기능(FR)·성공지표(§7) 양쪽에서 종료. 남은 것은 의도적 비목표(ML·Flink)뿐. 로컬
+테스트 40 OK(정적 26 = 기존 23+신규 3, 앵커링 14 = 기존 13+신규 1).
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
