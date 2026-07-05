@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 from pathlib import Path
 
 from src.jobs.common.spark_session import get_spark
@@ -81,16 +82,27 @@ def run() -> None:
             f"window=[{args.start_ts}, {args.end_ts})"
         )
 
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["open_time_ms", "close", "volume"])
-        for row in rows:
-            writer.writerow([row["open_time_ms"], row["close"], row["volume"]])
+    # CSV 본문 생성(로컬/S3 공용)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["open_time_ms", "close", "volume"])
+    for row in rows:
+        writer.writerow([row["open_time_ms"], row["close"], row["volume"]])
+    body = buf.getvalue()
+
+    # --out 이 s3://... 면 boto3 로 업로드(K4: k8s 잡이 픽스처를 S3 로 공유), 아니면 로컬.
+    if args.out.startswith("s3://"):
+        import boto3
+
+        bucket, _, key = args.out[len("s3://"):].partition("/")
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=body.encode("utf-8"))
+    else:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(body, encoding="utf-8")
 
     print(
-        f"anchor fixture 완료: {len(rows)} buckets → {out_path} "
+        f"anchor fixture 완료: {len(rows)} buckets → {args.out} "
         f"(symbol={args.symbol}, interval={args.interval})"
     )
 

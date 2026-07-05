@@ -1,7 +1,11 @@
 {
   "uid": "order-execution-summary",
   "title": "Order Execution Summary",
-  "tags": ["binance", "orders", "lakehouse"],
+  "tags": [
+    "binance",
+    "orders",
+    "lakehouse"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -11,19 +15,54 @@
     "to": "2024-03-01T00:00:00Z"
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "symbol",
+        "label": "Symbol",
+        "type": "custom",
+        "description": "서빙 심볼 선택 (Phase K4 멀티심볼)",
+        "query": "BTCUSDT,ETHUSDT,SOLUSDT",
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": true,
+          "text": "BTCUSDT",
+          "value": "BTCUSDT"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "BTCUSDT",
+            "value": "BTCUSDT"
+          },
+          {
+            "selected": false,
+            "text": "ETHUSDT",
+            "value": "ETHUSDT"
+          },
+          {
+            "selected": false,
+            "text": "SOLUSDT",
+            "value": "SOLUSDT"
+          }
+        ]
+      }
+    ]
   },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Fill Rate (%)",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT AVG(fill_rate) * 100 AS fill_rate_pct FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+          "rawSQL": "SELECT AVG(fill_rate) * 100 AS fill_rate_pct FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol')"
         }
       ],
       "fieldConfig": {
@@ -32,26 +71,43 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 90 },
-              { "color": "green", "value": 98 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 98
+              }
             ]
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Cancel Rate (%)",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT AVG(cancel_rate) * 100 AS cancel_rate_pct FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+          "rawSQL": "SELECT AVG(cancel_rate) * 100 AS cancel_rate_pct FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol')"
         }
       ],
       "fieldConfig": {
@@ -60,141 +116,228 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 5 },
-              { "color": "red", "value": 10 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
             ]
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Total Orders",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT SUM(total_orders) AS total_orders FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+          "rawSQL": "SELECT SUM(total_orders) AS total_orders FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol')"
         }
       ],
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
     },
     {
       "id": 4,
       "type": "stat",
       "title": "Avg Fill Delay (sec)",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT AVG(avg_fill_delay_sec) AS avg_fill_delay_sec FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary)"
+          "rawSQL": "SELECT AVG(avg_fill_delay_sec) AS avg_fill_delay_sec FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol')"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s" },
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
     },
     {
       "id": 5,
       "type": "timeseries",
       "title": "Fill / Cancel Rate Trend",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, fill_rate * 100 AS fill_rate_pct, cancel_rate * 100 AS cancel_rate_pct FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, fill_rate * 100 AS fill_rate_pct, cancel_rate * 100 AS cancel_rate_pct FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      }
     },
     {
       "id": 6,
       "type": "timeseries",
       "title": "Hourly Orders",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, total_orders, filled_orders, canceled_orders FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, total_orders, filled_orders, canceled_orders FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      }
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "Order Quantity Trend",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, CAST(total_order_qty AS DOUBLE) AS total_order_qty, CAST(total_filled_qty AS DOUBLE) AS total_filled_qty FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, CAST(total_order_qty AS DOUBLE) AS total_order_qty, CAST(total_filled_qty AS DOUBLE) AS total_filled_qty FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 }
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      }
     },
     {
       "id": 8,
       "type": "table",
       "title": "Recent Order Execution Summary",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 1,
-          "rawSQL": "SELECT summary_hour, symbol, total_orders, filled_orders, canceled_orders, fill_rate, cancel_rate, avg_fill_delay_sec, avg_order_qty, avg_filled_qty, total_order_qty, total_filled_qty, benchmark_vwap, avg_buy_fill_price, avg_sell_fill_price, buy_slippage_bps, sell_slippage_bps, slippage_cost_quote, updated_at FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour DESC LIMIT 100"
+          "rawSQL": "SELECT summary_hour, symbol, total_orders, filled_orders, canceled_orders, fill_rate, cancel_rate, avg_fill_delay_sec, avg_order_qty, avg_filled_qty, total_order_qty, total_filled_qty, benchmark_vwap, avg_buy_fill_price, avg_sell_fill_price, buy_slippage_bps, sell_slippage_bps, slippage_cost_quote, updated_at FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol') ORDER BY summary_hour DESC LIMIT 100"
         }
       ],
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 }
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      }
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "Slippage vs VWAP (bps) — Buy / Sell",
       "description": "양수 = 벤치마크(VWAP) 대비 유리. 방향 분리(부호 상쇄 방지). 0 주변으로 퇴화하지 않고 변동성과 상관하면 anchor≠benchmark 가 지켜진 것.",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, buy_slippage_bps, sell_slippage_bps FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, buy_slippage_bps, sell_slippage_bps FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "none", "custom": { "axisLabel": "bps" } },
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "axisLabel": "bps"
+          }
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      }
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "Slippage Cost (quote)",
       "description": "Σ filled_qty × 방향보정 가격차. 양수 = 순유리(절감), 음수 = 순비용.",
-      "datasource": { "type": "grafana-athena-datasource", "uid": "athena_iceberg" },
+      "datasource": {
+        "type": "grafana-athena-datasource",
+        "uid": "athena_iceberg"
+      },
       "targets": [
         {
           "refId": "A",
           "format": 0,
-          "rawSQL": "SELECT summary_hour AS time, CAST(slippage_cost_quote AS DOUBLE) AS slippage_cost_quote FROM order_execution_summary WHERE summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary) ORDER BY summary_hour"
+          "rawSQL": "SELECT summary_hour AS time, CAST(slippage_cost_quote AS DOUBLE) AS slippage_cost_quote FROM order_execution_summary WHERE symbol = '$symbol' AND summary_hour >= (SELECT MAX(summary_hour) - INTERVAL '30' DAY FROM order_execution_summary WHERE symbol = '$symbol') ORDER BY summary_hour"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "currencyUSD" },
+        "defaults": {
+          "unit": "currencyUSD"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      }
     }
   ]
 }

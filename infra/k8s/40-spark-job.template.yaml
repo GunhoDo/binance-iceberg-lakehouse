@@ -52,7 +52,7 @@ spec:
                 --conf spark.kubernetes.container.image=binance-spark-k8s:latest \
                 --conf spark.kubernetes.container.image.pullPolicy=IfNotPresent \
                 --conf spark.kubernetes.executor.podNamePrefix=${JOB_NAME} \
-                --conf spark.executor.instances=2 \
+                --conf spark.executor.instances=1 \
                 --conf spark.kubernetes.executor.request.cores=1 \
                 --conf spark.kubernetes.executor.secretKeyRef.AWS_ACCESS_KEY_ID=aws-creds:AWS_ACCESS_KEY_ID \
                 --conf spark.kubernetes.executor.secretKeyRef.AWS_SECRET_ACCESS_KEY=aws-creds:AWS_SECRET_ACCESS_KEY \
@@ -62,8 +62,8 @@ spec:
                 --conf spark.driver.bindAddress=0.0.0.0 \
                 --conf spark.driver.port=7078 \
                 --conf spark.blockManager.port=7079 \
-                --conf spark.driver.memory=2g \
-                --conf spark.executor.memory=2g \
+                --conf spark.driver.memory=1536m \
+                --conf spark.executor.memory=1536m \
                 --conf spark.driver.maxResultSize=512m \
                 --conf spark.driver.extraJavaOptions=-Dderby.system.home=/tmp/derby-${RUN_ID} \
                 --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \

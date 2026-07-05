@@ -1,0 +1,40 @@
+# 45-spark-generic-job.template.yaml — 임의 명령 실행 범용 Job (Phase K4)
+#
+# 40-spark-job 은 01~09 표준 인자(--start-ts/--end-ts/--run-id)에 고정돼 있다. K4 의
+# batch_ingest_kafka / export_anchor_klines / orders_simulator 는 인자 규약이 달라
+# 이 범용 템플릿으로 임의 ${SCRIPT} 를 spark-k8s 이미지에서 실행한다. spark SA·aws-creds·
+# POD_IP 를 항상 주입(스파크 잡이면 client 모드 드라이버가 됨, 순수 파이썬이면 무해).
+# k4_run.sh 가 envsubst(${JOB_NAME} ${SCRIPT_B64})로 렌더링한다. 스크립트는 base64
+# 단일 줄로 넘겨 YAML 블록 들여쓰기 파손을 피한다(파드에서 디코드 후 bash 실행).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: binance-lakehouse
+  labels:
+    app: k4-batch
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: k4-batch
+    spec:
+      serviceAccountName: spark
+      restartPolicy: Never
+      containers:
+        - name: driver
+          image: binance-spark-k8s:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: aws-creds
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          command: ["/bin/bash", "-c"]
+          args:
+            - echo "${SCRIPT_B64}" | base64 -d | bash

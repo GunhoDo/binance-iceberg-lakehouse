@@ -1065,6 +1065,73 @@ success(동일 팩토리라 전이). DAG import 에러 0, 3개 DAG 정상 인식
 
 ---
 
+## D31. (v3 / Phase K4) 멀티심볼 실데이터 E2E — k3d Kafka → S3 → 심볼별 슬리피지
+
+### 결정 / 실행
+
+K1 이 k3d Kafka 에 쌓은 **라이브 BTC/ETH/SOL** klines/trades 를 S3 raw 로 배치 적재하고,
+심볼별 파이프라인(요약/VWAP) → 심볼별 앵커 픽스처(S3) → 심볼별 주문 시뮬 → 슬리피지까지
+3심볼 실데이터로 흐르게 했다. 산출물: `src/streams/batch_ingest_kafka.py`(bounded Kafka→raw
+배치 적재), `infra/k8s/45-spark-generic-job.template.yaml`·`k4_run.sh`(비표준 인자 잡용 범용
+Job), `infra/k8s/k4_multisymbol_e2e.sh`(오케스트레이터), `src/jobs/maintenance/
+verify_multisymbol.py`·`reset_multisymbol_staging.py`, `export_anchor_klines.py`/
+`orders_simulator.py` 의 S3 in/out 지원, Grafana 대시보드 2종에 `$symbol` 템플릿 변수.
+
+검증(실데이터, 실 스케줄러): market_hourly_summary VWAP — BTC $38,706–62,982 / ETH
+$1,754–1,775 / SOL $79.88–81.34. order_execution_summary 슬리피지(bps) — BTC buy +0.12
+sell −0.33 / ETH buy +0.26 sell −0.77 / SOL buy −2.23 sell +3.14. 3심볼 모두 raw→
+processed→summary 관통.
+
+### 실데이터에서 드러난 함정 3가지 (정직 기록)
+
+- **`_spark_metadata` 가 배치 append 를 가린다**: 예전 Structured Streaming parquet 싱크가
+  `raw/klines`·`raw/trades` 에 `_spark_metadata/` 커밋 로그를 남겼다. `spark.read.parquet()`
+  는 그 경로를 스트리밍 출력으로 인식해 **커밋 로그에 등재된 파일만** 읽고 배치로 append 한
+  새 파일을 무시한다 → 신규 심볼 데이터가 안 보임(02 raw_window_rows=0). 해결: 두 경로의
+  `_spark_metadata/` 삭제(삭제 후엔 전체 파일 리스팅으로 폴백, 구 데이터도 그대로 보임).
+- **Kafka 오프셋 재사용 → 스테이징 dedup 충돌**: staging_klines/staging_orders 는 (topic,
+  partition, offset) 로 멱등 MERGE 한다. 그러나 오프셋은 한 토픽·파티션의 현재 수명 안에서만
+  유일하다. 예전 단일심볼(BTC) 데이터가 오프셋 0..N 을 이미 점유한 상태에서 k3d 의 새 멀티심볼
+  메시지(역시 0..N)를 적재하면, 새 ETH/SOL 행이 옛 BTC 행과 오프셋이 겹쳐 `WHEN NOT MATCHED`
+  에 걸려 드롭된다(삽입 0). 해결: E2E 시작 시 `reset_multisymbol_staging.py` 로 두 스테이징을
+  비운다(raw 에서 재생성 가능한 중간 계층 + Iceberg 스냅샷 복구 가능). processed/summary 는
+  비즈니스 키(klines symbol/interval/open_time, orders order_id) MERGE 라 멀티심볼이 자연 합류.
+- **단일 노드 메모리 압박(7.75 GiB)**: Kafka+인제스터+Airflow+Spark(드라이버+executor×2, 2g)
+  동시 상주가 노드 용량을 초과해 요약 잡(06) 드라이버가 OOMKilled. 해결: `40-spark-job.template`
+  을 executor 2→1, heap 2g→1536m 로 낮추고(데이터가 작아 무해), 수동 E2E 동안 Airflow
+  scheduler/webserver 를 0 으로 스케일다운해 ~2g 확보.
+
+### 핵심 선택
+
+- **raw 재사용 + 배치 적재(스트리밍 아님)**: `batch_ingest_kafka.py` 는 earliest→latest 로
+  bounded read 후 `.mode("append")` 평문 parquet(= `_spark_metadata` 미생성). stream_raw_*.py
+  와 컬럼 사영을 정확히 일치시켜 처리 계층이 그대로 파싱한다.
+- **범용 Job 템플릿**: 40-spark-job 은 01~09 표준 인자(--start-ts/--end-ts/--run-id)에 고정.
+  batch_ingest/anchor-export/simulator 는 인자 규약이 달라 `45-spark-generic-job` + `k4_run.sh`
+  (스크립트를 base64 단일 줄로 파드에 주입 후 bash 실행)로 임의 명령을 spark 이미지에서 실행.
+- **앵커 픽스처 S3 경유**: export_anchor_klines 가 processed_klines 를 심볼별 CSV 로 S3 에
+  쓰고(io.StringIO→put_object), orders_simulator 가 S3 에서 받아(load) 앵커 모드로 시뮬 →
+  슬리피지 벤치마크(VWAP, market_hourly_summary)와 다른 시계열 유지(순환 방지, D_slippage 계승).
+- **Grafana `$symbol` 커스텀 변수**: 두 대시보드 전 패널 rawSQL 에 `symbol = '$symbol'` 주입,
+  30일 창 MAX 서브쿼리도 심볼별. 서빙 계층 하나로 3심볼 전환 뷰.
+
+### 대안 / 알려진 델타
+
+- **스테이징 dedup 키를 비즈니스 키로 (K5 후보)**: 오프셋 재사용 함정의 근본 원인은 (topic,
+  partition, offset)이 "운송 좌표"일 뿐 "레코드 정체성"이 아니라는 것 — 한 토픽·파티션의 현재
+  수명 안에서만 유일해 k3d 재생성·리플레이·백필·구 데이터 오프셋 대역 중복에 깨진다. 정답은 이미
+  프로젝트 안에 있다: **trades(01)는 스테이징 없이 raw→processed 직행 + `trade_id`(비즈니스 키)
+  dedup 이라 이 함정을 안 겪는다.** 근본 해결은 klines 를 (symbol, interval, open_time),
+  orders 를 (order_id[, status]) 로 dedup 하고 offset 은 계보 메타데이터로만 남기는 것.
+  A안(staging 의 offset dedup 만 제거 → 멱등성은 processed 비즈니스 키 MERGE 전담)으로 시작해
+  B안(klines/orders 도 trades 처럼 staging 제거·raw→processed 직행)으로 수렴 권장. K4 범위
+  밖이라 `reset_multisymbol_staging.py` 로 우회했고, 이 리셋 스크립트는 K5 리팩터 완료 시 제거 대상.
+- **executor 1개·1536m 는 k3d 단일 노드 현실 반영**: 클라우드(노드 다수)에선 원복 가능.
+- **k4_multisymbol_e2e.sh 는 데모용 원샷**: 시작 시 스테이징을 리셋하므로 증분 일일 파이프라인
+  (Airflow)과 목적이 다르다. 일일 파이프라인은 스테이징을 증분 유지.
+
+---
+
 ## 모르는 것 / 학습이 더 필요한 것 (자기 인식)
 
 이 섹션은 현 시점의 학습 격차를 의식적으로 기록한다.
