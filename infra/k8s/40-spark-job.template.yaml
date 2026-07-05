@@ -1,0 +1,81 @@
+# 40-spark-job.template.yaml — Spark 배치 잡 1건 실행 템플릿 (Phase K2)
+#
+# kustomize 대상 아님. spark_submit_k8s.sh 가 envsubst 로 placeholder 를 채워
+# apply → wait → logs → cleanup 한다. ${..} 변수: JOB_NAME/JOB_PATH/START_TS/
+# END_TS/RUN_ID.
+#
+# 이 Job 파드가 spark-submit(client 모드) 드라이버가 되고, 드라이버가 executor
+# 파드 2개를 직접 생성한다(RBAC: 30-spark-rbac.yaml). S3/Glue 자격은 aws-creds
+# Secret(spark_submit_k8s.sh 가 로컬 aws configure 로 생성)에서 주입한다 —
+# 드라이버는 envFrom, executor 는 secretKeyRef.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: binance-lakehouse
+  labels:
+    app: spark-batch
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: spark-batch
+        run-id: ${RUN_ID}
+    spec:
+      serviceAccountName: spark
+      restartPolicy: Never
+      containers:
+        - name: driver
+          image: binance-spark-k8s:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: aws-creds
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "driver pod ip=$POD_IP job=${JOB_PATH} run=${RUN_ID}"
+              exec /opt/spark/bin/spark-submit \
+                --master k8s://https://kubernetes.default.svc:443 \
+                --deploy-mode client \
+                --name ${RUN_ID} \
+                --conf spark.kubernetes.namespace=binance-lakehouse \
+                --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
+                --conf spark.kubernetes.container.image=binance-spark-k8s:latest \
+                --conf spark.kubernetes.container.image.pullPolicy=IfNotPresent \
+                --conf spark.kubernetes.executor.podNamePrefix=${JOB_NAME} \
+                --conf spark.executor.instances=2 \
+                --conf spark.kubernetes.executor.request.cores=1 \
+                --conf spark.kubernetes.executor.secretKeyRef.AWS_ACCESS_KEY_ID=aws-creds:AWS_ACCESS_KEY_ID \
+                --conf spark.kubernetes.executor.secretKeyRef.AWS_SECRET_ACCESS_KEY=aws-creds:AWS_SECRET_ACCESS_KEY \
+                --conf spark.kubernetes.executor.secretKeyRef.AWS_REGION=aws-creds:AWS_REGION \
+                --conf spark.kubernetes.executor.secretKeyRef.AWS_DEFAULT_REGION=aws-creds:AWS_DEFAULT_REGION \
+                --conf spark.driver.host=$POD_IP \
+                --conf spark.driver.bindAddress=0.0.0.0 \
+                --conf spark.driver.port=7078 \
+                --conf spark.blockManager.port=7079 \
+                --conf spark.driver.memory=2g \
+                --conf spark.executor.memory=2g \
+                --conf spark.driver.maxResultSize=512m \
+                --conf spark.driver.extraJavaOptions=-Dderby.system.home=/tmp/derby-${RUN_ID} \
+                --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+                --conf spark.sql.catalog.glue=org.apache.iceberg.spark.SparkCatalog \
+                --conf spark.sql.catalog.glue.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog \
+                --conf spark.sql.catalog.glue.warehouse=s3://binance-iceberg-lake/warehouse \
+                --conf spark.sql.catalog.glue.io-impl=org.apache.iceberg.aws.s3.S3FileIO \
+                --conf spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.DefaultAWSCredentialsProviderChain \
+                --conf spark.sql.parquet.enableVectorizedReader=false \
+                --conf spark.sql.iceberg.vectorization.enabled=false \
+                --conf spark.sql.shuffle.partitions=8 \
+                /workspace/${JOB_PATH} \
+                --start-ts "${START_TS}" \
+                --end-ts "${END_TS}" \
+                --run-id "${RUN_ID}"

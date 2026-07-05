@@ -1,0 +1,46 @@
+######################################################################
+# Spark-on-Kubernetes runner image (Phase K2)
+#
+# Docker-compose 스택은 pip pyspark 기반 Dockerfile.spark 를 쓰지만, k8s
+# 네이티브 실행(spark-submit --master k8s://)은 executor 파드를 스케줄러가
+# 이미지의 내장 엔트리포인트(/opt/entrypoint.sh "executor")로 띄운다. pip
+# pyspark 배포판에는 이 엔트리포인트가 없으므로 공식 apache/spark 이미지를
+# 베이스로 삼는다(멀티아치 amd64/arm64 → Apple Silicon k3d 에서도 동작).
+#
+# 베이스에 더하는 것: Iceberg/Glue/hadoop-aws jar(s3a 원천 읽기·Glue 카탈로그),
+# 파이썬 의존성, 그리고 드라이버가 임포트할 저장소 src 코드. executor 는 순수
+# Spark SQL/DataFrame 만 실행(파이썬 UDF 없음)하므로 src 코드가 필요 없지만
+# 단일 이미지로 드라이버·executor 를 공용한다.
+######################################################################
+FROM apache/spark:3.5.5-scala2.12-java17-python3-ubuntu
+
+# --- 추가 jar (Iceberg 1.7.0 + hadoop-aws 3.3.4, Dockerfile.spark 와 동일 버전) ---
+# 베이스 이미지의 SPARK_HOME=/opt/spark, jar 는 /opt/spark/jars 에 놓으면 자동 로드.
+USER root
+ARG SPARK_JARS=/opt/spark/jars
+RUN set -eux; \
+    base_iceberg=https://repo1.maven.org/maven2/org/apache/iceberg; \
+    base_hadoop=https://repo1.maven.org/maven2/org/apache/hadoop; \
+    base_aws=https://repo1.maven.org/maven2/com/amazonaws; \
+    base_wildfly=https://repo1.maven.org/maven2/org/wildfly/openssl/wildfly-openssl; \
+    curl -fsSL -o "$SPARK_JARS/iceberg-spark-runtime-3.5_2.12-1.7.0.jar" "$base_iceberg/iceberg-spark-runtime-3.5_2.12/1.7.0/iceberg-spark-runtime-3.5_2.12-1.7.0.jar"; \
+    curl -fsSL -o "$SPARK_JARS/iceberg-aws-bundle-1.7.0.jar"            "$base_iceberg/iceberg-aws-bundle/1.7.0/iceberg-aws-bundle-1.7.0.jar"; \
+    curl -fsSL -o "$SPARK_JARS/hadoop-aws-3.3.4.jar"                    "$base_hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar"; \
+    curl -fsSL -o "$SPARK_JARS/aws-java-sdk-bundle-1.12.262.jar"        "$base_aws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar"; \
+    curl -fsSL -o "$SPARK_JARS/wildfly-openssl-1.0.7.Final.jar"         "$base_wildfly/1.0.7.Final/wildfly-openssl-1.0.7.Final.jar"
+
+# --- 파이썬 의존성 (베이스에 pyspark 포함, 잡이 쓰는 추가분만) ---
+RUN pip install --no-cache-dir boto3 pandas pyarrow tabulate
+
+# --- 저장소 코드 (드라이버가 src.jobs.* 임포트) ---
+# fixtures/데이터 제외하고 코드만. PYTHONPATH 로 `src` 패키지 해석.
+COPY src /workspace/src
+COPY config /workspace/config
+ENV PYTHONPATH=/workspace
+
+# derby(로컬 메타스토어 파생)·ivy 홈을 쓰기 가능한 위치로. 베이스 실행 UID=185.
+ENV HOME=/tmp
+WORKDIR /opt/spark/work-dir
+
+# ENTRYPOINT 는 베이스(/opt/entrypoint.sh) 그대로 유지 — executor 파드가 이를 사용.
+USER 185
